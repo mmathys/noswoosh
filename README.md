@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/icon.png" width="180" alt="noswoosh icon">
+  <img src="assets/icon-rounded.png" width="180" alt="noswoosh icon">
 </p>
 
 # noswoosh
