@@ -21,6 +21,10 @@ else
     echo "    re-enable manually in System Settings > Keyboard > Keyboard Shortcuts > Mission Control"
 fi
 
+echo "==> Restoring the Dock's default space-follow behavior (restarts the Dock)"
+defaults delete com.apple.dock workspaces-auto-swoosh 2>/dev/null || true
+killall Dock 2>/dev/null || true
+
 echo "==> Removing binaries and source"
 rm -f "$BIN_DIR/noswoosh" "$BIN_DIR/noswoosh.swift" "$BIN_DIR/noswoosh-ctrl-arrows"
 

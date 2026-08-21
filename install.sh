@@ -27,6 +27,10 @@ cp noswoosh noswoosh.swift noswoosh-ctrl-arrows "$BIN_DIR/"
 echo "==> Disabling system animated Ctrl+arrow shortcuts (live + persisted)"
 "$BIN_DIR/noswoosh-ctrl-arrows" off
 
+echo "==> Disabling the Dock's window-order space-follow (empty-desktop yank fix; restarts the Dock)"
+defaults write com.apple.dock workspaces-auto-swoosh -bool NO
+killall Dock 2>/dev/null || true
+
 echo "==> Installing LaunchAgent $LABEL"
 mkdir -p "$HOME/Library/LaunchAgents"
 cat > "$PLIST" <<EOF

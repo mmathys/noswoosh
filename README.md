@@ -66,21 +66,28 @@ launchctl kickstart -k gui/$(id -u)/ax.max.noswoosh
 - **Ctrl+→ / Ctrl+←** — switch one space right/left, instantly. Clamped at the first/last space (no rubber-band bounce).
 - CLI (mostly for scripting/debugging):
   ```sh
-  noswoosh list    # "space 2 of 4"
-  noswoosh right   # switch once and exit
+  noswoosh list      # "space 2 of 4"
+  noswoosh right     # switch once and exit
   noswoosh left
-  noswoosh empty   # which spaces have no windows
+  noswoosh version
   ```
 
-## The empty-desktop yank (and why this tool prevents it)
+## The empty-desktop yank (and the one-line fix)
 
 While building this we found a macOS behavior you can reproduce with plain native switching: **switch to a desktop with no windows, and ~400 ms later macOS yanks you to a different desktop.** Chain of events (visible in the Dock's log):
 
-1. Landing on a windowless space, WindowServer promotes the last-active app to front process.
+1. Landing on a windowless space, WindowServer re-promotes the last-active app to front process.
 2. That app (AppKit) re-orders its key window — which lives on another space.
-3. The Dock's follow rule fires: `switching to space N for window ordered on non-visible space`, and you're yanked to wherever that window lives.
+3. The Dock's window-order follow rule fires: `switching to space N for window ordered on non-visible space`, and you're yanked to wherever that window lives.
 
-The daemon prevents this by keeping an invisible 1×1 window on every space and force-fronting *itself* (via `_SLPSSetFrontProcessWithOptions`, the same private call yabai uses — normal activation is denied to background processes by macOS 14+ cooperative activation) whenever it switches you onto a windowless space. It owns no other windows, so nothing gets re-ordered and nothing yanks you. This protection is why the tool runs as a daemon: it only holds while the process lives.
+Disassembling the Dock shows this follow rule is a **separate code path** from the "switch to a Space with open windows when switching to an application" setting (`AppleSpacesSwitchOnActivate` — disabling that does *not* help). The Dock registers for the underlying WindowServer notification at startup only when the legacy pref `workspaces-auto-swoosh` is true — which is the default. So the clean fix, fittingly a sibling of the extinct key this tool is named after:
+
+```sh
+defaults write com.apple.dock workspaces-auto-swoosh -bool NO
+killall Dock
+```
+
+The installer applies this. Side effect (arguably a feature): a window opening on another space no longer auto-drags you to it. Restore anytime with `defaults delete com.apple.dock workspaces-auto-swoosh && killall Dock`.
 
 ## Caveats
 
