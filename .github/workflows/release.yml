@@ -1,3 +1,12 @@
+# Release pipeline: tag vX.Y.Z (matching noswooshVersion in noswoosh.swift) and push.
+# Builds the binary, assembles noswoosh.app, signs + notarizes + staples both, attaches
+# them to the GitHub Release, and bumps the cask in mmathys/homebrew-tap.
+#
+# Secrets: DEVELOPER_ID_CERT_P12_BASE64, DEVELOPER_ID_CERT_PASSWORD, CI_KEYCHAIN_PASSWORD,
+# DEVELOPER_ID_SIGN_IDENTITY, ASC_API_KEY_ID, ASC_API_ISSUER_ID, ASC_API_KEY_P8_BASE64,
+# and HOMEBREW_TAP_TOKEN (fine-grained PAT, Contents:write on mmathys/homebrew-tap).
+# Each group is optional: missing signing secrets skip signing, missing ASC secrets skip
+# notarization, a missing tap token skips the cask bump. The build always runs.
 name: Release
 
 on:
@@ -106,3 +115,32 @@ jobs:
             || echo "release already exists, uploading assets"
           gh release upload "$GITHUB_REF_NAME" \
             "noswoosh-$VERSION-macos.zip" "noswoosh-$VERSION.app.zip" --clobber
+
+      - name: Bump cask in homebrew-tap
+        if: steps.signing.outputs.can_notarize == 'true'
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "HOMEBREW_TAP_TOKEN not set — skipping cask bump."
+            echo "Update Casks/noswoosh.rb in mmathys/homebrew-tap by hand."
+            exit 0
+          fi
+          sha=$(shasum -a 256 "noswoosh-$VERSION.app.zip" | cut -d' ' -f1)
+          git clone --depth=1 \
+            "https://x-access-token:$TAP_TOKEN@github.com/mmathys/homebrew-tap.git" tap
+          cd tap
+          sed -i '' \
+            -e "s|^  version \".*\"$|  version \"$VERSION\"|" \
+            -e "s|^  sha256 \".*\"$|  sha256 \"$sha\"|" \
+            Casks/noswoosh.rb
+          if git diff --quiet; then
+            echo "Cask already up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -qam "noswoosh $VERSION"
+          git push
+          echo "Cask bumped to $VERSION ($sha)."

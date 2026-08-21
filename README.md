@@ -23,8 +23,8 @@
 brew install --cask mmathys/tap/noswoosh
 ```
 
-This installs a prebuilt, signed and notarized `noswoosh.app`, runs the one-time
-system configuration, and starts a login daemon. No compiler required.
+This installs `noswoosh.app`, runs the one-time system configuration, and starts a
+login daemon.
 
 Then **grant Accessibility permission** — macOS gates synthetic events behind it, and
 it's the one step that can't be scripted. Approve the prompt on first start, or add
@@ -184,8 +184,8 @@ swiftc noswoosh.swift -O -o noswoosh \
     -F /System/Library/PrivateFrameworks -framework SkyLight
 ```
 
-Releases are cut by tagging — see [RELEASING.md](RELEASING.md) for the signing and
-notarization setup.
+Releases are cut by bumping `noswooshVersion` and pushing a matching `vX.Y.Z` tag;
+CI builds, signs and publishes the app and updates the Homebrew cask.
 
 ## Credits
 
