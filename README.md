@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="assets/icon-rounded.png" width="180" alt="noswoosh icon">
-</p>
-
 # noswoosh
 
 Instant, animation-free switching between macOS Spaces with **Ctrl+←/→** — no SIP disabling, no global Reduce Motion. A single ~250-line Swift file you compile yourself.
