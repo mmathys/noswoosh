@@ -1,0 +1,4 @@
+spaceswitcher
+!spaceswitcher.swift
+*.o
+.DS_Store
