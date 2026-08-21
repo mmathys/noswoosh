@@ -36,7 +36,7 @@ import ApplicationServices
 // Build: swiftc noswoosh.swift -O -o noswoosh \
 //          -F /System/Library/PrivateFrameworks -framework SkyLight
 
-let noswooshVersion = "1.4.0"
+let noswooshVersion = "1.5.0"
 
 // MARK: - Setup / teardown (system configuration, all user-level)
 
@@ -222,14 +222,29 @@ func log(_ message: String) {
 let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
 if !AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary) {
     log("waiting for Accessibility permission (System Settings > Privacy & Security > Accessibility)")
+    var secondsWaited = 0
+    var openedSettings = false
     Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-        guard AXIsProcessTrusted() else { return }
-        if getppid() == 1 {
-            log("Accessibility granted — restarting to apply it")
-        } else {
-            log("Accessibility granted — restart noswoosh to apply it")
+        if AXIsProcessTrusted() {
+            if getppid() == 1 {
+                log("Accessibility granted — restarting to apply it")
+            } else {
+                log("Accessibility granted — restart noswoosh to apply it")
+            }
+            exit(0)
         }
-        exit(0)
+        secondsWaited += 1
+        // The system prompt above already offers an "Open System Settings" button.
+        // Give it a chance; if it was dismissed we are a background agent with no
+        // UI, and the only remaining signal is a log file nobody opens — so take
+        // the user to the pane directly, once.
+        if secondsWaited == 15, !openedSettings {
+            openedSettings = true
+            let pane = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+            if let url = URL(string: pane), NSWorkspace.shared.open(url) {
+                log("opened System Settings > Privacy & Security > Accessibility")
+            }
+        }
     }
 }
 

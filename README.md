@@ -31,9 +31,9 @@ This installs `noswoosh.app`, runs the one-time system configuration, and starts
 login daemon.
 
 Then **grant Accessibility permission** — macOS gates synthetic events behind it, and
-it's the one step that can't be scripted. Approve the prompt on first start, or add
-`/Applications/noswoosh.app` under **System Settings → Privacy & Security →
-Accessibility**.
+it's the one step that can't be scripted. Approve the prompt on first start; if you
+dismiss it, noswoosh opens **System Settings → Privacy & Security → Accessibility**
+for you, where you can add `/Applications/noswoosh.app` yourself.
 
 That's it — the daemon picks the grant up within a second, and **Ctrl+←/→** switches
 spaces instantly.
