@@ -142,5 +142,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -qam "noswoosh $VERSION"
-          git push
-          echo "Cask bumped to $VERSION ($sha)."
+          # The release is already published by now, so a tap push failure (bad or
+          # expired token) must not mark the release itself as failed — warn instead.
+          if git push; then
+            echo "Cask bumped to $VERSION ($sha)."
+          else
+            echo "::warning::Could not push the cask bump — check HOMEBREW_TAP_TOKEN. Set version=$VERSION sha256=$sha in mmathys/homebrew-tap by hand."
+          fi
