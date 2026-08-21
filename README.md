@@ -1,25 +1,13 @@
-<p align="center">
-  <img src="assets/icon-rounded.png" width="180" alt="noswoosh icon">
-</p>
+# noswoosh
 
-<h1 align="center">noswoosh</h1>
+Instant, animation-free switching between macOS Spaces with **Ctrl+←/→**.
+No SIP disabling, no global Reduce Motion.
 
-<p align="center">
-  Instant, animation-free switching between macOS Spaces with <b>Ctrl+←/→</b>.<br>
-  No SIP disabling, no global Reduce Motion.
-</p>
+[![Latest release](https://img.shields.io/github/v/release/mmathys/noswoosh?color=blue)](https://github.com/mmathys/noswoosh/releases/latest)
+[![MIT license](https://img.shields.io/github/license/mmathys/noswoosh?color=blue)](LICENSE)
+![macOS 12+](https://img.shields.io/badge/macOS-12%2B-lightgrey)
 
-<p align="center">
-  <a href="https://github.com/mmathys/noswoosh/releases/latest"><img src="https://img.shields.io/github/v/release/mmathys/noswoosh?color=blue" alt="Latest release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/mmathys/noswoosh?color=blue" alt="MIT license"></a>
-  <img src="https://img.shields.io/badge/macOS-12%2B-lightgrey" alt="macOS 12+">
-</p>
-
-<p align="center">
-  <img src="assets/demo.gif" width="820" alt="Side-by-side: the macOS space-switch animation versus noswoosh switching instantly">
-</p>
-
----
+![Side-by-side: the macOS space-switch animation versus noswoosh switching instantly](assets/demo.gif)
 
 ## Install
 
