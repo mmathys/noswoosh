@@ -4,7 +4,7 @@
 
 # noswoosh
 
-Instant, animation-free switching between macOS Spaces with **Ctrl+←/→** — no third-party apps, no SIP disabling, no global Reduce Motion. A single ~250-line Swift file you compile yourself.
+Instant, animation-free switching between macOS Spaces with **Ctrl+←/→** — no SIP disabling, no global Reduce Motion. A single ~250-line Swift file you compile yourself.
 
 *The name: "swoosh" is Apple's own word for the space-slide animation — from the long-dead Snow Leopard setting `workspaces-swoosh-animation-off`. This is that setting, resurrected.*
 
