@@ -19,6 +19,14 @@ echo "==> Building noswoosh"
 swiftc noswoosh.swift -O -o noswoosh \
     -F /System/Library/PrivateFrameworks -framework SkyLight
 
+# Opt-in: a stable Developer ID signature keeps the Accessibility grant across
+# rebuilds (macOS ties it to the signing identity, not the binary hash).
+if [ -n "${NOSWOOSH_SIGN_IDENTITY:-}" ]; then
+    echo "==> Codesigning with $NOSWOOSH_SIGN_IDENTITY"
+    codesign --force --options runtime --timestamp \
+        --sign "$NOSWOOSH_SIGN_IDENTITY" noswoosh
+fi
+
 echo "==> Installing to $BIN_DIR"
 mkdir -p "$BIN_DIR"
 cp noswoosh noswoosh.swift "$BIN_DIR/"

@@ -3,3 +3,4 @@ noswoosh-ctrl-arrows
 !noswoosh.swift
 *.o
 .DS_Store
+build/

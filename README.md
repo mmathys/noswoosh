@@ -23,9 +23,27 @@ This tool takes the approach used by [InstantSpaceSwitcher](https://github.com/j
 
 ## Install
 
-Requires Xcode Command Line Tools (`xcode-select --install`).
+### Homebrew Cask (recommended)
 
-### Homebrew
+Installs a prebuilt, signed and notarized `noswoosh.app` — no compiler needed, and the
+Accessibility grant survives upgrades.
+
+```sh
+brew install --cask mmathys/tap/noswoosh
+```
+
+The cask runs `noswoosh setup` and installs the login LaunchAgent for you. All that's
+left is to **grant Accessibility permission** (macOS prompts on first start, or add
+`/Applications/noswoosh.app` under System Settings → Privacy & Security →
+Accessibility), then:
+
+```sh
+launchctl kickstart -k gui/$(id -u)/ax.max.noswoosh
+```
+
+### Homebrew Formula (builds from source)
+
+Requires Xcode Command Line Tools (`xcode-select --install`).
 
 ```sh
 brew install mmathys/tap/noswoosh
@@ -33,17 +51,22 @@ noswoosh setup                  # disable animated Ctrl+arrow shortcuts + empty-
 brew services start noswoosh    # start the daemon now and at every login
 ```
 
-Then the one step that can't be scripted: **grant Accessibility permission** (macOS prompts on first start, or add `/opt/homebrew/opt/noswoosh/bin/noswoosh` under System Settings → Privacy & Security → Accessibility) and run `brew services restart noswoosh`. Re-show these instructions anytime with `brew info noswoosh`. Note: every `brew upgrade` changes the binary hash, so the Accessibility grant must be re-done after upgrades.
+Then the one step that can't be scripted: **grant Accessibility permission** (macOS prompts on first start, or add `/opt/homebrew/opt/noswoosh/bin/noswoosh` under System Settings → Privacy & Security → Accessibility) and run `brew services restart noswoosh`. Re-show these instructions anytime with `brew info noswoosh`. Note: this path builds locally and is therefore ad-hoc signed, so every `brew upgrade` changes the signature and the Accessibility grant must be re-done — use the cask above to avoid that.
 
-The formula lives in [mmathys/homebrew-tap](https://github.com/mmathys/homebrew-tap).
+Both the cask and the formula live in [mmathys/homebrew-tap](https://github.com/mmathys/homebrew-tap).
 
 ### From source
+
+Requires Xcode Command Line Tools (`xcode-select --install`).
 
 ```sh
 git clone https://github.com/mmathys/noswoosh.git
 cd noswoosh
 ./install.sh
 ```
+
+Set `NOSWOOSH_SIGN_IDENTITY="Developer ID Application: ..."` to have the local build
+codesigned, which keeps the Accessibility grant across rebuilds.
 
 The installer:
 
@@ -63,7 +86,7 @@ Then restart the daemon:
 launchctl kickstart -k gui/$(id -u)/ax.max.noswoosh
 ```
 
-> **Important:** the permission is tied to the binary's code signature. **Every rebuild invalidates it.** If toggling the checkbox doesn't take, *remove* the entry ("−"), restart the daemon (which re-triggers the prompt), enable it, and restart the daemon once more. Check `~/Library/Logs/noswoosh.log` — a `waiting for Accessibility permission` line after a restart means it's still not trusted.
+> **Important:** the permission is tied to the binary's code signature, so **every rebuild of an unsigned build invalidates it** (the signed cask build is not affected). If toggling the checkbox doesn't take, *remove* the entry ("−"), restart the daemon (which re-triggers the prompt), enable it, and restart the daemon once more. Check `~/Library/Logs/noswoosh.log` — a `waiting for Accessibility permission` line after a restart means it's still not trusted.
 
 ## Usage
 
@@ -107,6 +130,10 @@ killall Dock
 ```
 
 Removes the daemon, binary, and LaunchAgent, and re-enables the system's animated Ctrl+arrow shortcuts. Also remove the Accessibility entry manually if you like.
+
+## Releasing
+
+See [RELEASING.md](RELEASING.md) for the signing, notarization, and release-tagging process.
 
 ## Credits
 
