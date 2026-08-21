@@ -23,9 +23,11 @@ Requires Xcode Command Line Tools (`xcode-select --install`).
 
 ```sh
 brew install mmathys/tap/spaceswitcher
+spaceswitcher-ctrl-arrows off          # disable the system's animated Ctrl+arrow shortcuts (live + persisted)
+brew services start spaceswitcher      # start the daemon now and at every login
 ```
 
-Then follow the printed caveats: run `spaceswitcher-ctrl-arrows off` (plus the two `defaults write` commands it prints for persistence), `brew services start spaceswitcher`, and grant Accessibility to `/opt/homebrew/opt/spaceswitcher/bin/spaceswitcher`. Re-show the caveats anytime with `brew info spaceswitcher`. Note: every `brew upgrade` changes the binary hash, so the Accessibility grant must be re-done after upgrades.
+Then the one step that can't be scripted: **grant Accessibility permission** (macOS prompts on first start, or add `/opt/homebrew/opt/spaceswitcher/bin/spaceswitcher` under System Settings → Privacy & Security → Accessibility) and run `brew services restart spaceswitcher`. Re-show these instructions anytime with `brew info spaceswitcher`. Note: every `brew upgrade` changes the binary hash, so the Accessibility grant must be re-done after upgrades.
 
 The formula lives in [mmathys/homebrew-tap](https://github.com/mmathys/homebrew-tap).
 

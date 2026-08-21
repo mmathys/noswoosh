@@ -18,21 +18,14 @@ fi
 echo "==> Building spaceswitcher"
 swiftc spaceswitcher.swift -O -o spaceswitcher \
     -F /System/Library/PrivateFrameworks -framework SkyLight
+swiftc tools/ctrl-arrows.swift -O -o spaceswitcher-ctrl-arrows
 
 echo "==> Installing to $BIN_DIR"
 mkdir -p "$BIN_DIR"
-cp spaceswitcher spaceswitcher.swift "$BIN_DIR/"
+cp spaceswitcher spaceswitcher.swift spaceswitcher-ctrl-arrows "$BIN_DIR/"
 
-echo "==> Disabling system animated Ctrl+arrow shortcuts (persisted)"
-defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 79 \
-    '{enabled = 0; value = { parameters = (65535, 123, 8650752); type = standard; };}'
-defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 81 \
-    '{enabled = 0; value = { parameters = (65535, 124, 8650752); type = standard; };}'
-
-echo "==> Disabling them live (no logout needed)"
-swiftc tools/ctrl-arrows.swift -o /tmp/spaceswitcher-ctrl-arrows \
-    && /tmp/spaceswitcher-ctrl-arrows off \
-    || echo "    live disable failed — log out and back in to apply"
+echo "==> Disabling system animated Ctrl+arrow shortcuts (live + persisted)"
+"$BIN_DIR/spaceswitcher-ctrl-arrows" off
 
 echo "==> Installing LaunchAgent $LABEL"
 mkdir -p "$HOME/Library/LaunchAgents"
