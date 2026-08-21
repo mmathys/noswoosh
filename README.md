@@ -57,8 +57,6 @@ build, which keeps the grant across rebuilds.
 
 </details>
 
-The cask lives in [mmathys/homebrew-tap](https://github.com/mmathys/homebrew-tap).
-
 ## Usage
 
 **Ctrl+→ / Ctrl+←** switches one space right/left, instantly. Movement is clamped at
