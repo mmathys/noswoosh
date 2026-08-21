@@ -37,29 +37,8 @@ launchctl kickstart -k gui/$(id -u)/ax.max.noswoosh
 
 That's it — **Ctrl+←/→** now switches spaces instantly.
 
-> [!NOTE]
-> The permission binds to the app's Developer ID signature, so it survives future
-> upgrades. Unsigned builds (the two options below) re-trigger it on every rebuild.
-
 <details>
-<summary><b>Alternative: Homebrew formula (builds from source)</b></summary>
-
-Requires Xcode Command Line Tools (`xcode-select --install`).
-
-```sh
-brew install mmathys/tap/noswoosh
-noswoosh setup                  # system config; restarts the Dock
-brew services start noswoosh    # start now and at every login
-```
-
-Grant Accessibility to `/opt/homebrew/opt/noswoosh/bin/noswoosh`, then
-`brew services restart noswoosh`. Because this builds locally it is ad-hoc signed, so
-every `brew upgrade` invalidates the grant — prefer the cask.
-
-</details>
-
-<details>
-<summary><b>Alternative: from source</b></summary>
+<summary><b>Build from source instead</b></summary>
 
 Requires Xcode Command Line Tools (`xcode-select --install`).
 
@@ -78,8 +57,7 @@ build, which keeps the grant across rebuilds.
 
 </details>
 
-Both the cask and the formula live in
-[mmathys/homebrew-tap](https://github.com/mmathys/homebrew-tap).
+The cask lives in [mmathys/homebrew-tap](https://github.com/mmathys/homebrew-tap).
 
 ## Usage
 

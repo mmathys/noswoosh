@@ -94,12 +94,11 @@ and stapling need the three `ASC_*` secrets as well.
    with the tag).
 2. `git tag vX.Y.Z && git push origin vX.Y.Z`
 3. Wait for the workflow. The Release gets `noswoosh-X.Y.Z-macos.zip` (raw signed
-   binary, used by the source Formula path) and `noswoosh-X.Y.Z.app.zip` (signed,
+   binary, for scripting or manual installs) and `noswoosh-X.Y.Z.app.zip` (signed,
    notarized, stapled bundle, used by the Cask).
 4. Update the Cask in [`mmathys/homebrew-tap`](https://github.com/mmathys/homebrew-tap):
    set `version` and `sha256` (the workflow prints both checksums in its
    "Package artifacts" step), then commit and push.
-5. Update the Formula's `url`/`sha256` for the source tarball as usual.
 
 ## Verifying a signed release
 
