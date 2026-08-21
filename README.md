@@ -4,7 +4,7 @@ Instant, animation-free switching between macOS Spaces with **Ctrl+←/→** —
 
 *The name: "swoosh" is Apple's own word for the space-slide animation — from the long-dead Snow Leopard setting `workspaces-swoosh-animation-off`. This is that setting, resurrected.*
 
-Verified on **macOS 26 (Tahoe)**, Apple Silicon. The technique it uses is known to work on macOS 14/15 as well.
+Verified on **macOS 26 (Tahoe)**, Apple Silicon, on a dual-display setup. The technique it uses is known to work on macOS 14/15 as well.
 
 ## Why
 
@@ -86,7 +86,6 @@ The daemon prevents this by keeping an invisible 1×1 window on every space and 
 
 - **Private APIs.** `SLSCopyManagedDisplaySpaces`, `SLSCopySpacesForWindows`, `_SLPSSetFrontProcessWithOptions`, and the undocumented gesture `CGEventField`s are unsupported by Apple and can break in any macOS release. (Known: macOS 27 betas changed gesture-event serialization — see WhichSpace for the IOHID-payload adaptation.)
 - **Apple Silicon quirk:** the reference implementations use `FLT_TRUE_MIN` as the gesture progress; that subnormal float gets flushed to zero (sign lost) somewhere in the event pipeline on macOS 26/arm64, making every switch go the same direction. This port uses `1e-4`, which survives and is still visually zero.
-- Single-display use is what's tested. Multi-display setups may need the cursor-display targeting logic from InstantSpaceSwitcher.
 - Turn off "Automatically rearrange Spaces based on most recent use" (System Settings → Desktop & Dock) if you want stable space ordering.
 
 ## Uninstall
