@@ -15,6 +15,10 @@
   <img src="https://img.shields.io/badge/macOS-12%2B-lightgrey" alt="macOS 12+">
 </p>
 
+<p align="center">
+  <img src="assets/demo.gif" width="820" alt="Side-by-side: the macOS space-switch animation versus noswoosh switching instantly">
+</p>
+
 ---
 
 ## Install
