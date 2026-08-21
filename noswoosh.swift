@@ -36,7 +36,7 @@ import ApplicationServices
 // Build: swiftc noswoosh.swift -O -o noswoosh \
 //          -F /System/Library/PrivateFrameworks -framework SkyLight
 
-let noswooshVersion = "1.3.1"
+let noswooshVersion = "1.4.0"
 
 // MARK: - Setup / teardown (system configuration, all user-level)
 
@@ -209,9 +209,28 @@ if args.count > 1 {
 
 // MARK: - Daemon mode: global hotkeys Ctrl+Left / Ctrl+Right
 
+func log(_ message: String) {
+    FileHandle.standardError.write("noswoosh: \(message)\n".data(using: .utf8)!)
+}
+
+// Accessibility trust is evaluated when the process starts and cached for its
+// lifetime, so a grant made while we are running does not take effect. Rather
+// than making the user restart the daemon by hand, poll and exit once trusted:
+// the LaunchAgent sets KeepAlive, so launchd immediately starts a fresh process
+// that picks the grant up. Run outside launchd there is nothing to restart us,
+// so say so instead.
 let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
 if !AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary) {
-    FileHandle.standardError.write("noswoosh: waiting for Accessibility permission (System Settings > Privacy & Security > Accessibility)\n".data(using: .utf8)!)
+    log("waiting for Accessibility permission (System Settings > Privacy & Security > Accessibility)")
+    Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+        guard AXIsProcessTrusted() else { return }
+        if getppid() == 1 {
+            log("Accessibility granted — restarting to apply it")
+        } else {
+            log("Accessibility granted — restart noswoosh to apply it")
+        }
+        exit(0)
+    }
 }
 
 let app = NSApplication.shared
@@ -234,7 +253,7 @@ for (id, keyCode) in [(UInt32(1), UInt32(kVK_LeftArrow)), (UInt32(2), UInt32(kVK
     let status = RegisterEventHotKey(keyCode, UInt32(controlKey), hotKeyID,
                                      GetApplicationEventTarget(), 0, &ref)
     if status != noErr {
-        FileHandle.standardError.write("noswoosh: could not register Ctrl+arrow hotkey (status \(status))\n".data(using: .utf8)!)
+        log("could not register Ctrl+arrow hotkey (status \(status))")
     }
 }
 

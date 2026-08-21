@@ -33,13 +33,10 @@ login daemon.
 Then **grant Accessibility permission** — macOS gates synthetic events behind it, and
 it's the one step that can't be scripted. Approve the prompt on first start, or add
 `/Applications/noswoosh.app` under **System Settings → Privacy & Security →
-Accessibility**. Then restart the daemon:
+Accessibility**.
 
-```sh
-launchctl kickstart -k gui/$(id -u)/ax.max.noswoosh
-```
-
-That's it — **Ctrl+←/→** now switches spaces instantly.
+That's it — the daemon picks the grant up within a second, and **Ctrl+←/→** switches
+spaces instantly.
 
 <details>
 <summary><b>Build from source instead</b></summary>
@@ -139,11 +136,12 @@ another space no longer auto-drags you to it.
 ## Troubleshooting
 
 **Ctrl+arrows do nothing.** Check `~/Library/Logs/noswoosh.log`. A
-`waiting for Accessibility permission` line after a restart means the daemon isn't
-trusted yet.
+`waiting for Accessibility permission` line as the last entry means the daemon still
+isn't trusted; once you grant it, the log shows `Accessibility granted` and the daemon
+restarts itself.
 
-**The Accessibility checkbox won't stick.** Remove the entry with "−", restart the
-daemon to re-trigger the prompt, enable it, then restart once more:
+**The Accessibility checkbox won't stick.** Remove the entry with "−" and let the
+daemon re-trigger the prompt, then approve it. If it still won't take:
 
 ```sh
 launchctl kickstart -k gui/$(id -u)/ax.max.noswoosh
