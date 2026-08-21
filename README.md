@@ -1,6 +1,8 @@
-# spaceswitcher
+# noswoosh
 
 Instant, animation-free switching between macOS Spaces with **Ctrl+←/→** — no third-party apps, no SIP disabling, no global Reduce Motion. A single ~250-line Swift file you compile yourself.
+
+*The name: "swoosh" is Apple's own word for the space-slide animation — from the long-dead Snow Leopard setting `workspaces-swoosh-animation-off`. This is that setting, resurrected.*
 
 Verified on **macOS 26 (Tahoe)**, Apple Silicon. The technique it uses is known to work on macOS 14/15 as well.
 
@@ -22,52 +24,52 @@ Requires Xcode Command Line Tools (`xcode-select --install`).
 ### Homebrew
 
 ```sh
-brew install mmathys/tap/spaceswitcher
-spaceswitcher-ctrl-arrows off          # disable the system's animated Ctrl+arrow shortcuts (live + persisted)
-brew services start spaceswitcher      # start the daemon now and at every login
+brew install mmathys/tap/noswoosh
+noswoosh-ctrl-arrows off          # disable the system's animated Ctrl+arrow shortcuts (live + persisted)
+brew services start noswoosh      # start the daemon now and at every login
 ```
 
-Then the one step that can't be scripted: **grant Accessibility permission** (macOS prompts on first start, or add `/opt/homebrew/opt/spaceswitcher/bin/spaceswitcher` under System Settings → Privacy & Security → Accessibility) and run `brew services restart spaceswitcher`. Re-show these instructions anytime with `brew info spaceswitcher`. Note: every `brew upgrade` changes the binary hash, so the Accessibility grant must be re-done after upgrades.
+Then the one step that can't be scripted: **grant Accessibility permission** (macOS prompts on first start, or add `/opt/homebrew/opt/noswoosh/bin/noswoosh` under System Settings → Privacy & Security → Accessibility) and run `brew services restart noswoosh`. Re-show these instructions anytime with `brew info noswoosh`. Note: every `brew upgrade` changes the binary hash, so the Accessibility grant must be re-done after upgrades.
 
 The formula lives in [mmathys/homebrew-tap](https://github.com/mmathys/homebrew-tap).
 
 ### From source
 
 ```sh
-git clone https://github.com/mmathys/spaceswitcher.git
-cd spaceswitcher
+git clone https://github.com/mmathys/noswoosh.git
+cd noswoosh
 ./install.sh
 ```
 
 The installer:
 
-1. Compiles `spaceswitcher.swift` and installs the binary + source to `~/.local/bin/`.
+1. Compiles `noswoosh.swift` and installs the binary + source to `~/.local/bin/`.
 2. Disables the system's **animated** Ctrl+←/→ Mission Control shortcuts (symbolic hotkeys 79/81) — persisted in `com.apple.symbolichotkeys` and applied live so no logout is needed. Ctrl+Shift+arrows and all other shortcuts are untouched.
-3. Installs and starts a LaunchAgent (`com.$USER.spaceswitcher`) so the daemon runs at every login. It logs to `~/Library/Logs/spaceswitcher.log`.
+3. Installs and starts a LaunchAgent (`com.$USER.noswoosh`) so the daemon runs at every login. It logs to `~/Library/Logs/noswoosh.log`.
 
 ### Grant Accessibility (one manual step)
 
 On first start the daemon requests Accessibility permission (macOS gates synthetic events behind it). Approve the prompt, or add it manually:
 
-**System Settings → Privacy & Security → Accessibility → "+" → Cmd+Shift+G → `~/.local/bin/spaceswitcher`**
+**System Settings → Privacy & Security → Accessibility → "+" → Cmd+Shift+G → `~/.local/bin/noswoosh`**
 
 Then restart the daemon:
 
 ```sh
-launchctl kickstart -k gui/$(id -u)/com.$USER.spaceswitcher
+launchctl kickstart -k gui/$(id -u)/com.$USER.noswoosh
 ```
 
-> **Important:** the permission is tied to the binary's code signature. **Every rebuild invalidates it.** If toggling the checkbox doesn't take, *remove* the entry ("−"), restart the daemon (which re-triggers the prompt), enable it, and restart the daemon once more. Check `~/Library/Logs/spaceswitcher.log` — a `waiting for Accessibility permission` line after a restart means it's still not trusted.
+> **Important:** the permission is tied to the binary's code signature. **Every rebuild invalidates it.** If toggling the checkbox doesn't take, *remove* the entry ("−"), restart the daemon (which re-triggers the prompt), enable it, and restart the daemon once more. Check `~/Library/Logs/noswoosh.log` — a `waiting for Accessibility permission` line after a restart means it's still not trusted.
 
 ## Usage
 
 - **Ctrl+→ / Ctrl+←** — switch one space right/left, instantly. Clamped at the first/last space (no rubber-band bounce).
 - CLI (mostly for scripting/debugging):
   ```sh
-  spaceswitcher list    # "space 2 of 4"
-  spaceswitcher right   # switch once and exit
-  spaceswitcher left
-  spaceswitcher empty   # which spaces have no windows
+  noswoosh list    # "space 2 of 4"
+  noswoosh right   # switch once and exit
+  noswoosh left
+  noswoosh empty   # which spaces have no windows
   ```
 
 ## The empty-desktop yank (and why this tool prevents it)

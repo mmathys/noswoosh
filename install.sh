@@ -1,13 +1,13 @@
 #!/bin/bash
-# spaceswitcher installer: builds from source, disables the system's animated
+# noswoosh installer: builds from source, disables the system's animated
 # Ctrl+arrow shortcuts, and installs a login LaunchAgent.
 set -euo pipefail
 cd "$(dirname "$0")"
 
 BIN_DIR="$HOME/.local/bin"
-LABEL="com.$USER.spaceswitcher"
+LABEL="com.$USER.noswoosh"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-LOG="$HOME/Library/Logs/spaceswitcher.log"
+LOG="$HOME/Library/Logs/noswoosh.log"
 
 if ! command -v swiftc >/dev/null; then
     echo "swiftc not found — install the Xcode Command Line Tools first:"
@@ -15,17 +15,17 @@ if ! command -v swiftc >/dev/null; then
     exit 1
 fi
 
-echo "==> Building spaceswitcher"
-swiftc spaceswitcher.swift -O -o spaceswitcher \
+echo "==> Building noswoosh"
+swiftc noswoosh.swift -O -o noswoosh \
     -F /System/Library/PrivateFrameworks -framework SkyLight
-swiftc tools/ctrl-arrows.swift -O -o spaceswitcher-ctrl-arrows
+swiftc tools/ctrl-arrows.swift -O -o noswoosh-ctrl-arrows
 
 echo "==> Installing to $BIN_DIR"
 mkdir -p "$BIN_DIR"
-cp spaceswitcher spaceswitcher.swift spaceswitcher-ctrl-arrows "$BIN_DIR/"
+cp noswoosh noswoosh.swift noswoosh-ctrl-arrows "$BIN_DIR/"
 
 echo "==> Disabling system animated Ctrl+arrow shortcuts (live + persisted)"
-"$BIN_DIR/spaceswitcher-ctrl-arrows" off
+"$BIN_DIR/noswoosh-ctrl-arrows" off
 
 echo "==> Installing LaunchAgent $LABEL"
 mkdir -p "$HOME/Library/LaunchAgents"
@@ -38,7 +38,7 @@ cat > "$PLIST" <<EOF
     <string>$LABEL</string>
     <key>ProgramArguments</key>
     <array>
-        <string>$BIN_DIR/spaceswitcher</string>
+        <string>$BIN_DIR/noswoosh</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -63,7 +63,7 @@ Done. One manual step remains:
 
   Grant Accessibility permission (macOS will prompt, or add it yourself):
   System Settings > Privacy & Security > Accessibility
-    > "+" > Cmd+Shift+G > $BIN_DIR/spaceswitcher
+    > "+" > Cmd+Shift+G > $BIN_DIR/noswoosh
 
   Then restart the daemon:
     launchctl kickstart -k gui/\$(id -u)/$LABEL

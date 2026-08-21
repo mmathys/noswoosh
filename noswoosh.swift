@@ -2,13 +2,13 @@ import Cocoa
 import Carbon.HIToolbox
 import ApplicationServices
 
-// spaceswitcher — instant macOS space switching (verified on macOS 26.5).
+// noswoosh — instant macOS space switching (verified on macOS 26.5).
 //
-//   spaceswitcher           daemon: Ctrl+Left / Ctrl+Right switch spaces instantly
-//   spaceswitcher left      switch one space left and exit
-//   spaceswitcher right     switch one space right and exit
-//   spaceswitcher list      print current space / count
-//   spaceswitcher empty     print which spaces have no windows
+//   noswoosh           daemon: Ctrl+Left / Ctrl+Right switch spaces instantly
+//   noswoosh left      switch one space left and exit
+//   noswoosh right     switch one space right and exit
+//   noswoosh list      print current space / count
+//   noswoosh empty     print which spaces have no windows
 //
 // How it works:
 // - The switch is a synthetic Dock-swipe trackpad gesture (technique from
@@ -28,7 +28,7 @@ import ApplicationServices
 //
 // Rebuilding changes the ad-hoc code signature — re-grant Accessibility
 // (System Settings > Privacy & Security) after every rebuild.
-// Build: swiftc spaceswitcher.swift -O -o spaceswitcher \
+// Build: swiftc noswoosh.swift -O -o noswoosh \
 //          -F /System/Library/PrivateFrameworks -framework SkyLight
 
 // MARK: - Private SkyLight / process APIs
@@ -237,7 +237,7 @@ if args.count > 1 {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.5))
         exit(0)
     default:
-        FileHandle.standardError.write("usage: spaceswitcher [left | right | list | empty]\n".data(using: .utf8)!)
+        FileHandle.standardError.write("usage: noswoosh [left | right | list | empty]\n".data(using: .utf8)!)
         exit(1)
     }
 }
@@ -246,7 +246,7 @@ if args.count > 1 {
 
 let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
 if !AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary) {
-    FileHandle.standardError.write("spaceswitcher: waiting for Accessibility permission (System Settings > Privacy & Security > Accessibility)\n".data(using: .utf8)!)
+    FileHandle.standardError.write("noswoosh: waiting for Accessibility permission (System Settings > Privacy & Security > Accessibility)\n".data(using: .utf8)!)
 }
 
 // .accessory (not .prohibited): required to own the holder window; the daemon
@@ -274,7 +274,7 @@ for (id, keyCode) in [(UInt32(1), UInt32(kVK_LeftArrow)), (UInt32(2), UInt32(kVK
     let status = RegisterEventHotKey(keyCode, UInt32(controlKey), hotKeyID,
                                      GetApplicationEventTarget(), 0, &ref)
     if status != noErr {
-        FileHandle.standardError.write("spaceswitcher: could not register Ctrl+arrow hotkey (status \(status))\n".data(using: .utf8)!)
+        FileHandle.standardError.write("noswoosh: could not register Ctrl+arrow hotkey (status \(status))\n".data(using: .utf8)!)
     }
 }
 
