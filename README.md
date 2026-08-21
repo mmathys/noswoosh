@@ -25,8 +25,9 @@ Requires Xcode Command Line Tools (`xcode-select --install`).
 
 ```sh
 brew install mmathys/tap/noswoosh
-noswoosh-ctrl-arrows off          # disable the system's animated Ctrl+arrow shortcuts (live + persisted)
-brew services start noswoosh      # start the daemon now and at every login
+noswoosh-ctrl-arrows off                                              # disable the system's animated Ctrl+arrow shortcuts (live + persisted)
+defaults write com.apple.dock workspaces-auto-swoosh -bool NO && killall Dock   # fix the empty-desktop yank (see below)
+brew services start noswoosh                                          # start the daemon now and at every login
 ```
 
 Then the one step that can't be scripted: **grant Accessibility permission** (macOS prompts on first start, or add `/opt/homebrew/opt/noswoosh/bin/noswoosh` under System Settings → Privacy & Security → Accessibility) and run `brew services restart noswoosh`. Re-show these instructions anytime with `brew info noswoosh`. Note: every `brew upgrade` changes the binary hash, so the Accessibility grant must be re-done after upgrades.
