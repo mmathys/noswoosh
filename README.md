@@ -4,7 +4,7 @@ Instant, animation-free switching between macOS Spaces with **Ctrl+←/→** —
 
 *The name: "swoosh" is Apple's own word for the space-slide animation — from the long-dead Snow Leopard setting `workspaces-swoosh-animation-off`. This is that setting, resurrected.*
 
-Verified on **macOS 26 (Tahoe)**, Apple Silicon, on a dual-display setup. The technique it uses is known to work on macOS 14/15 as well.
+Verified on **macOS 26 (Tahoe)**, Apple Silicon. The technique it uses is known to work on macOS 14/15 as well.
 
 ## Why
 
