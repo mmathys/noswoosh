@@ -25,9 +25,8 @@ Requires Xcode Command Line Tools (`xcode-select --install`).
 
 ```sh
 brew install mmathys/tap/noswoosh
-noswoosh-ctrl-arrows off                                              # disable the system's animated Ctrl+arrow shortcuts (live + persisted)
-defaults write com.apple.dock workspaces-auto-swoosh -bool NO && killall Dock   # fix the empty-desktop yank (see below)
-brew services start noswoosh                                          # start the daemon now and at every login
+noswoosh setup                  # disable animated Ctrl+arrow shortcuts + empty-desktop yank fix (restarts the Dock)
+brew services start noswoosh    # start the daemon now and at every login
 ```
 
 Then the one step that can't be scripted: **grant Accessibility permission** (macOS prompts on first start, or add `/opt/homebrew/opt/noswoosh/bin/noswoosh` under System Settings → Privacy & Security → Accessibility) and run `brew services restart noswoosh`. Re-show these instructions anytime with `brew info noswoosh`. Note: every `brew upgrade` changes the binary hash, so the Accessibility grant must be re-done after upgrades.
@@ -45,7 +44,7 @@ cd noswoosh
 The installer:
 
 1. Compiles `noswoosh.swift` and installs the binary + source to `~/.local/bin/`.
-2. Disables the system's **animated** Ctrl+←/→ Mission Control shortcuts (symbolic hotkeys 79/81) — persisted in `com.apple.symbolichotkeys` and applied live so no logout is needed. Ctrl+Shift+arrows and all other shortcuts are untouched.
+2. Runs `noswoosh setup`: disables the system's **animated** Ctrl+←/→ Mission Control shortcuts (symbolic hotkeys 79/81, live + persisted — Ctrl+Shift+arrows and all other shortcuts are untouched) and applies the empty-desktop yank fix (restarts the Dock). `noswoosh teardown` reverses both.
 3. Installs and starts a LaunchAgent (`ax.max.noswoosh`) so the daemon runs at every login. It logs to `~/Library/Logs/noswoosh.log`.
 
 ### Grant Accessibility (one manual step)
@@ -70,6 +69,7 @@ launchctl kickstart -k gui/$(id -u)/ax.max.noswoosh
   noswoosh list      # "space 2 of 4"
   noswoosh right     # switch once and exit
   noswoosh left
+  noswoosh setup     # system config: shortcuts + yank fix (teardown reverses)
   noswoosh version
   ```
 
@@ -88,7 +88,7 @@ defaults write com.apple.dock workspaces-auto-swoosh -bool NO
 killall Dock
 ```
 
-The installer applies this. Side effect (arguably a feature): a window opening on another space no longer auto-drags you to it. Restore anytime with `defaults delete com.apple.dock workspaces-auto-swoosh && killall Dock`.
+`noswoosh setup` applies this (both install paths run it). Side effect (arguably a feature): a window opening on another space no longer auto-drags you to it. Restore anytime with `noswoosh teardown`.
 
 ## Caveats
 

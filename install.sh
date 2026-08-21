@@ -18,18 +18,13 @@ fi
 echo "==> Building noswoosh"
 swiftc noswoosh.swift -O -o noswoosh \
     -F /System/Library/PrivateFrameworks -framework SkyLight
-swiftc tools/ctrl-arrows.swift -O -o noswoosh-ctrl-arrows
 
 echo "==> Installing to $BIN_DIR"
 mkdir -p "$BIN_DIR"
-cp noswoosh noswoosh.swift noswoosh-ctrl-arrows "$BIN_DIR/"
+cp noswoosh noswoosh.swift "$BIN_DIR/"
 
-echo "==> Disabling system animated Ctrl+arrow shortcuts (live + persisted)"
-"$BIN_DIR/noswoosh-ctrl-arrows" off
-
-echo "==> Disabling the Dock's window-order space-follow (empty-desktop yank fix; restarts the Dock)"
-defaults write com.apple.dock workspaces-auto-swoosh -bool NO
-killall Dock 2>/dev/null || true
+echo "==> Configuring system (shortcuts + empty-desktop yank fix; restarts the Dock)"
+"$BIN_DIR/noswoosh" setup
 
 echo "==> Installing LaunchAgent $LABEL"
 mkdir -p "$HOME/Library/LaunchAgents"
