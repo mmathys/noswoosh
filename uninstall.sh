@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 BIN_DIR="$HOME/.local/bin"
-LABEL="com.$USER.noswoosh"
+LABEL="ax.max.noswoosh"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
 echo "==> Stopping and removing LaunchAgent"

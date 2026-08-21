@@ -45,7 +45,7 @@ The installer:
 
 1. Compiles `noswoosh.swift` and installs the binary + source to `~/.local/bin/`.
 2. Disables the system's **animated** Ctrl+←/→ Mission Control shortcuts (symbolic hotkeys 79/81) — persisted in `com.apple.symbolichotkeys` and applied live so no logout is needed. Ctrl+Shift+arrows and all other shortcuts are untouched.
-3. Installs and starts a LaunchAgent (`com.$USER.noswoosh`) so the daemon runs at every login. It logs to `~/Library/Logs/noswoosh.log`.
+3. Installs and starts a LaunchAgent (`ax.max.noswoosh`) so the daemon runs at every login. It logs to `~/Library/Logs/noswoosh.log`.
 
 ### Grant Accessibility (one manual step)
 
@@ -56,7 +56,7 @@ On first start the daemon requests Accessibility permission (macOS gates synthet
 Then restart the daemon:
 
 ```sh
-launchctl kickstart -k gui/$(id -u)/com.$USER.noswoosh
+launchctl kickstart -k gui/$(id -u)/ax.max.noswoosh
 ```
 
 > **Important:** the permission is tied to the binary's code signature. **Every rebuild invalidates it.** If toggling the checkbox doesn't take, *remove* the entry ("−"), restart the daemon (which re-triggers the prompt), enable it, and restart the daemon once more. Check `~/Library/Logs/noswoosh.log` — a `waiting for Accessibility permission` line after a restart means it's still not trusted.
