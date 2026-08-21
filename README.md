@@ -19,6 +19,18 @@ This tool takes the approach used by [InstantSpaceSwitcher](https://github.com/j
 
 Requires Xcode Command Line Tools (`xcode-select --install`).
 
+### Homebrew
+
+```sh
+brew install mmathys/tap/spaceswitcher
+```
+
+Then follow the printed caveats: run `spaceswitcher-ctrl-arrows off` (plus the two `defaults write` commands it prints for persistence), `brew services start spaceswitcher`, and grant Accessibility to `/opt/homebrew/opt/spaceswitcher/bin/spaceswitcher`. Re-show the caveats anytime with `brew info spaceswitcher`. Note: every `brew upgrade` changes the binary hash, so the Accessibility grant must be re-done after upgrades.
+
+The formula lives in [mmathys/homebrew-tap](https://github.com/mmathys/homebrew-tap).
+
+### From source
+
 ```sh
 git clone https://github.com/mmathys/spaceswitcher.git
 cd spaceswitcher
