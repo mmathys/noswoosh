@@ -2,7 +2,7 @@
 # noswoosh installer: builds from source, disables the system's animated
 # Ctrl+arrow shortcuts, and installs a login LaunchAgent.
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 BIN_DIR="$HOME/.local/bin"
 LABEL="ax.max.noswoosh"

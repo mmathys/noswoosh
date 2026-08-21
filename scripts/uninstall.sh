@@ -1,7 +1,7 @@
 #!/bin/bash
 # Removes noswoosh and restores the system's animated Ctrl+arrow shortcuts.
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 BIN_DIR="$HOME/.local/bin"
 LABEL="ax.max.noswoosh"

@@ -46,7 +46,7 @@ Requires Xcode Command Line Tools (`xcode-select --install`).
 ```sh
 git clone https://github.com/mmathys/noswoosh.git
 cd noswoosh
-./install.sh
+./scripts/install.sh
 ```
 
 The installer compiles `noswoosh.swift` to `~/.local/bin/`, runs `noswoosh setup`, and
@@ -168,7 +168,7 @@ work on macOS 14 and 15 as well.
 ## Uninstall
 
 ```sh
-brew uninstall --cask noswoosh     # or: ./uninstall.sh, if installed from source
+brew uninstall --cask noswoosh     # or: ./scripts/uninstall.sh, from source
 ```
 
 This stops the daemon, removes the LaunchAgent, and restores both system settings that
