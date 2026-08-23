@@ -13,13 +13,19 @@ import ApplicationServices
 //   noswoosh list       print current space / count
 //   noswoosh version    print version
 //
-// How it works: switching is a synthetic Dock-swipe gesture (technique from
-// jurplel/InstantSpaceSwitcher, MIT) with near-zero progress and high velocity —
-// it runs through the Dock's own pipeline (state stays consistent) but the
-// animation has no distance to travel, so it is instant. Two input sources feed
-// one switch core: a Ctrl+arrow hotkey, and an event tap that intercepts real
-// 3-finger horizontal swipes and replaces them with the instant switch. Posting
-// events requires Accessibility permission.
+// How it works: two input sources feed one switch core — a Ctrl+arrow hotkey,
+// and an event tap that intercepts real 3-finger horizontal swipes and replaces
+// them with the instant switch (posting/tapping events requires Accessibility
+// permission). The switch itself has two modes:
+// - gesture (default): a synthetic Dock-swipe (techniques from
+//   jurplel/InstantSpaceSwitcher, MIT, and joshuarli/iss, ISC) — it runs
+//   through the Dock's own pipeline, so state stays consistent everywhere:
+//   the Dock is the sole authoritative owner of the Spaces model.
+// - direct (experimental, NOSWOOSH_SWITCH_MODE=direct): show/hide the spaces
+//   straight through WindowServer (SLSShowSpaces/SLSHideSpaces/
+//   SLSManagedDisplaySetCurrentSpace). Instant and transition-free, but the
+//   Dock's in-process Spaces model cannot be updated from outside, so
+//   Mission Control desyncs (issue #1 research notes).
 //
 // macOS 27 (Tahoe's successor) added validation: synthetic Dock swipes must
 // carry a serialized raw IOHID queue payload in CGEvent field 4205, and each
@@ -82,7 +88,7 @@ func setCtrlArrowShortcuts(enabled: Bool) {
     }
 }
 
-// MARK: - Private SkyLight reads (space bookkeeping only)
+// MARK: - Private SkyLight calls (space bookkeeping + direct switching)
 
 typealias CGSConnectionID = UInt32
 
@@ -95,9 +101,24 @@ func SLSCopyManagedDisplaySpaces(_ cid: CGSConnectionID) -> Unmanaged<CFArray>
 @_silgen_name("SLSGetActiveSpace")
 func SLSGetActiveSpace(_ cid: CGSConnectionID) -> UInt64
 
+@_silgen_name("SLSShowSpaces")
+func SLSShowSpaces(_ cid: CGSConnectionID, _ spaces: CFArray)
+
+@_silgen_name("SLSHideSpaces")
+func SLSHideSpaces(_ cid: CGSConnectionID, _ spaces: CFArray)
+
+@_silgen_name("SLSManagedDisplaySetCurrentSpace")
+func SLSManagedDisplaySetCurrentSpace(_ cid: CGSConnectionID, _ display: CFString, _ space: UInt64) -> Int32
+
+@_silgen_name("SLSManagedDisplaySetIsAnimating")
+func SLSManagedDisplaySetIsAnimating(_ cid: CGSConnectionID, _ display: CFString, _ animating: Bool) -> Int32
+
+@_silgen_name("SLSCopySpacesForWindows")
+func SLSCopySpacesForWindows(_ cid: CGSConnectionID, _ selector: Int32, _ windows: CFArray) -> Unmanaged<CFArray>?
+
 let cid = SLSMainConnectionID()
 
-struct SpaceInfo { let ids: [UInt64]; let currentIndex: Int }
+struct SpaceInfo { let ids: [UInt64]; let currentIndex: Int; let displayIdent: String? }
 
 // Space list for the display that owns the currently active space, plus the
 // active space's index in it. Keying off the global active space (not
@@ -112,7 +133,8 @@ func spaceInfo() -> SpaceInfo? {
         guard let spaces = display["Spaces"] as? [[String: Any]] else { continue }
         let ids = spaces.compactMap { ($0["id64"] as? NSNumber)?.uint64Value }
         if let idx = ids.firstIndex(of: active) {
-            return SpaceInfo(ids: ids, currentIndex: idx)
+            return SpaceInfo(ids: ids, currentIndex: idx,
+                             displayIdent: display["Display Identifier"] as? String)
         }
     }
     return nil
@@ -150,6 +172,9 @@ let fieldSwipePositionY = field(126)   // 27 payload
 let fieldSwipeVelocityX = field(129)
 let fieldSwipeVelocityY = field(130)
 let fieldGesturePhase   = field(132)
+let fieldGestureScrollY = field(119)   // iss style
+let fieldScrollGestureFlagBits = field(135)   // iss style: direction hint
+let fieldGestureZoomDeltaX     = field(139)   // iss style: required
 
 let kCGSEventGesture: Int64 = 29
 let kCGSEventDockControl: Int64 = 30
@@ -160,20 +185,62 @@ let gestureVelocity = 2000.0
 
 enum GesturePhase: Int64 { case began = 1, changed = 2, ended = 4, cancelled = 8 }
 
-// Synthetic events we post re-enter our own event tap; the tap passes through
-// exactly this many DockControl/gesture events untouched instead of acting on
-// them. Every post below bumps this; the tap decrements. Harmless in CLI mode
-// (no tap runs) since the process exits promptly.
+// Synthetic events we post re-enter our own event tap. The 26 path tags its
+// events (they may be spread over time, so a counter could mismatch against
+// interleaved real gestures); the 27 path's paired events are counted: the tap
+// passes through exactly this many DockControl/gesture events untouched.
+// Harmless in CLI mode (no tap runs) since the process exits promptly.
 var passthrough = 0
 
-// MARK: pre-27 path (macOS 26) — bare Dock-swipe, near-zero progress
+// MARK: pre-27 path (macOS 26) — bare Dock-swipe, three styles
 
-func postDockSwipe(_ phase: GesturePhase, right: Bool) {
+// macOS 26.0–26.5 (fixed by 26.6): WindowServer builds the destination space's
+// compositing surfaces *as the swipe's progress advances* — a near-zero-
+// progress commit (style "zero", the legacy technique) lands on a space whose
+// surfaces were never built and get dropped: windows stay onscreen with
+// alpha 1 but never paint (issue #1). Styles via NOSWOOSH_GESTURE_STYLE:
+// - "zero" (default): the legacy instant sequence — near-zero progress, high
+//   velocity. Correct on macOS 26.6+; wedges on 26.0–26.5.
+// - "ramp": progress ramps 0 → ±1 over NOSWOOSH_GESTURE_MS (default 40ms) —
+//   the only shape verified wedge-free on 26.5, at the cost of a fast
+//   visible slide. The workaround for 26.0–26.5.
+// - "iss": the joshuarli/iss (ISC) event shape — NO progress field at all;
+//   direction rides in integer field 135 as the bit pattern of ±FLT_TRUE_MIN
+//   (an integer field, so the subnormal survives the float-pipeline flush the
+//   zero style's 1e-4 works around), field 139 = FLT_TRUE_MIN, terminal
+//   velocity ±400. Tested on 26.5.2: equally instant, equally wedged — same
+//   zero-travel class as "zero".
+// NOSWOOSH_GESTURE_MS: total duration for "ramp"; optional inter-phase gap
+// for "iss" (default 0 = atomic; ~10ms per jurplel/InstantSpaceSwitcher
+// PR #88 — tested on 26.5.2, did not help the wedge).
+enum GestureStyle { case iss, ramp, zero }
+let gestureStyle: GestureStyle = {
+    switch ProcessInfo.processInfo.environment["NOSWOOSH_GESTURE_STYLE"] {
+    case "ramp": return .ramp
+    case "iss": return .iss
+    default: return .zero
+    }
+}()
+let gestureDurationMS: Int = {
+    if let raw = ProcessInfo.processInfo.environment["NOSWOOSH_GESTURE_MS"],
+       let ms = Int(raw) {
+        return min(max(ms, 0), 1000)
+    }
+    return gestureStyle == .ramp ? 40 : 0
+}()
+
+// Synthetic events identify themselves to our own event tap via this tag in
+// the user-data field, so the tap passes them through instead of intercepting
+// them. Real trackpad gestures carry 0 there.
+let noswooshEventTag: Int64 = 0x4E53_5753 // 'NSWS'
+
+// Default progress is near zero: commits the switch with nothing left to
+// animate (the paced path passes a real ramp instead).
+// NOTE: not FLT_TRUE_MIN — that subnormal flushes to zero (sign lost) in
+// the event pipeline on Apple Silicon, breaking direction; 1e-4 survives.
+func postDockSwipe(_ phase: GesturePhase, right: Bool, progress magnitude: Double = 1e-4) {
     guard let ev = CGEvent(source: nil) else { return }
-    // Near-zero progress commits the switch with nothing left to animate.
-    // NOTE: not FLT_TRUE_MIN — that subnormal flushes to zero (sign lost) in
-    // the event pipeline on Apple Silicon, breaking direction; 1e-4 survives.
-    let progress = 1e-4 * (right ? 1 : -1)
+    let progress = magnitude * (right ? 1 : -1)
     let velocity = gestureVelocity * (right ? 1 : -1)
     ev.setIntegerValueField(fieldCGSEventType, value: kCGSEventDockControl)
     ev.setIntegerValueField(fieldGestureHIDType, value: kIOHIDEventTypeDockSwipe)
@@ -182,8 +249,93 @@ func postDockSwipe(_ phase: GesturePhase, right: Bool) {
     ev.setIntegerValueField(fieldSwipeMotion, value: kCGGestureMotionHorizontal)
     ev.setDoubleValueField(fieldSwipeVelocityX, value: velocity)
     ev.setDoubleValueField(fieldSwipeVelocityY, value: velocity)
-    passthrough += 1
+    ev.setIntegerValueField(.eventSourceUserData, value: noswooshEventTag)
     ev.post(tap: .cgSessionEventTap)
+}
+
+// iss-style event: no progress field at all; see the style comment above.
+func makeIssDockEvent(_ phase: GesturePhase, right: Bool) -> CGEvent? {
+    guard let ev = CGEvent(source: nil) else { return nil }
+    ev.setIntegerValueField(fieldCGSEventType, value: kCGSEventDockControl)
+    ev.setIntegerValueField(fieldGestureHIDType, value: kIOHIDEventTypeDockSwipe)
+    ev.setIntegerValueField(fieldGesturePhase, value: phase.rawValue)
+    let hint = right ? Float.leastNonzeroMagnitude : -Float.leastNonzeroMagnitude
+    ev.setIntegerValueField(fieldScrollGestureFlagBits,
+                            value: Int64(Int32(bitPattern: hint.bitPattern)))
+    ev.setIntegerValueField(fieldSwipeMotion, value: kCGGestureMotionHorizontal)
+    ev.setDoubleValueField(fieldGestureScrollY, value: 0)
+    ev.setDoubleValueField(fieldGestureZoomDeltaX, value: Double(Float.leastNonzeroMagnitude))
+    if phase == .ended {
+        ev.setDoubleValueField(fieldSwipeVelocityX, value: right ? 400 : -400)
+        ev.setDoubleValueField(fieldSwipeVelocityY, value: 0)
+    }
+    ev.setIntegerValueField(.eventSourceUserData, value: noswooshEventTag)
+    return ev
+}
+
+// Dock event + companion gesture event, both tagged for our own tap.
+func postTaggedPair(_ dock: CGEvent) {
+    guard let companion = CGEvent(source: nil) else { return }
+    companion.setIntegerValueField(fieldCGSEventType, value: kCGSEventGesture)
+    companion.setIntegerValueField(.eventSourceUserData, value: noswooshEventTag)
+    dock.post(tap: .cgSessionEventTap)
+    companion.post(tap: .cgSessionEventTap)
+}
+
+// Atomic iss sequence: build all three phases up front so we never emit a
+// truncated one, then post each as a tracked pair back-to-back.
+func postIssSequence(right: Bool) {
+    var events: [CGEvent] = []
+    for phase in [GesturePhase.began, .changed, .ended] {
+        guard let ev = makeIssDockEvent(phase, right: right) else { return }
+        events.append(ev)
+    }
+    events.forEach(postTaggedPair)
+}
+
+// One paced sequence at a time; switches requested mid-sequence queue up and
+// run back-to-back, so rapid inputs never interleave two gestures.
+var gestureInFlight = false
+var pendingSwitches: [Bool] = []
+
+func postPacedDockSwipe(right: Bool) {
+    gestureInFlight = true
+    let finish = {
+        gestureInFlight = false
+        if !pendingSwitches.isEmpty {
+            postPacedDockSwipe(right: pendingSwitches.removeFirst())
+        }
+    }
+    if gestureStyle == .iss {
+        // iss shape with phases a fixed gap apart (PR #88 fallback for the
+        // Dock dropping back-to-back phases).
+        let gap = Double(gestureDurationMS) / 1000.0
+        if let began = makeIssDockEvent(.began, right: right) { postTaggedPair(began) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + gap) {
+            if let changed = makeIssDockEvent(.changed, right: right) { postTaggedPair(changed) }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + gap * 2) {
+            if let ended = makeIssDockEvent(.ended, right: right) { postTaggedPair(ended) }
+            finish()
+        }
+        return
+    }
+    // ramp style: changed events at roughly a real gesture's cadence
+    // (~16ms apart), progress ramping linearly so the destination surfaces
+    // get composited by commit time.
+    postDockSwipe(.began, right: right)
+    let duration = Double(gestureDurationMS) / 1000.0
+    let steps = min(max(gestureDurationMS / 16, 1), 8)
+    for i in 1...steps {
+        let fraction = Double(i) / Double(steps + 1)
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration * fraction) {
+            postDockSwipe(.changed, right: right, progress: fraction)
+        }
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+        postDockSwipe(.ended, right: right, progress: 1.0)
+        finish()
+    }
 }
 
 // MARK: macOS 27+ path — IOHID payload + companion pairs
@@ -293,6 +445,163 @@ func postPair(_ dock: CGEvent) {
     companion.post(tap: .cgSessionEventTap)
 }
 
+// MARK: - Direct WindowServer switch (experimental, off by default)
+
+// Instant and transition-free, but structurally inconsistent: the Dock's
+// in-process Spaces model (its private _currentSpace state, which Mission
+// Control trusts) cannot be written from outside the Dock — yabai does it via
+// SIP-off code injection; Hammerspoon gave up and drives Mission Control's
+// AX UI instead. Kept for experiments only: NOSWOOSH_SWITCH_MODE=direct.
+let useDirectSwitch =
+    ProcessInfo.processInfo.environment["NOSWOOSH_SWITCH_MODE"] == "direct"
+
+// Bring the app owning the topmost window ON THE LANDING SPACE to the front.
+// Without this the menu bar composites both spaces' bars (double-draw garble),
+// because nothing tells the system focus moved. Safe here — unlike activation
+// mid-gesture (which amplified the surface race), no transition is in flight.
+// The candidate MUST be resolved by mapping windows to the destination space
+// (SLSCopySpacesForWindows): the "what's onscreen" list is stale right after a
+// direct switch, and activating whatever it lists first re-activates the app
+// we just LEFT, whose key window is on a now-hidden space — WindowServer then
+// re-promotes that window on top of the landing space and Mission Control's
+// model desyncs. Debounced so rapid-fire switching activates once, on the
+// final landing. NOSWOOSH_NO_ACTIVATE=1 disables (menu-bar garble returns).
+let skipActivation = ProcessInfo.processInfo.environment["NOSWOOSH_NO_ACTIVATE"] == "1"
+var pendingActivation: DispatchWorkItem?
+func activateLandingAppSoon(on dest: UInt64) {
+    pendingActivation?.cancel()
+    let work = DispatchWorkItem { activateApp(onSpace: dest) }
+    pendingActivation = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work)
+}
+
+// Topmost normal window on a space, resolved via SLSCopySpacesForWindows
+// (the plain onscreen list is stale right after a switch).
+func topWindow(onSpace dest: UInt64) -> (num: UInt32, pid: pid_t)? {
+    guard let wins = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID)
+            as? [[String: Any]] else { return nil }
+    for w in wins { // front-to-back
+        guard (w[kCGWindowLayer as String] as? Int) == 0,
+              ((w[kCGWindowAlpha as String] as? Double) ?? 1) > 0,
+              let num = w[kCGWindowNumber as String] as? UInt32,
+              let pid = w[kCGWindowOwnerPID as String] as? pid_t,
+              pid != getpid() else { continue }
+        let spaces = SLSCopySpacesForWindows(cid, 0x7, [NSNumber(value: num)] as CFArray)?
+            .takeRetainedValue() as? [NSNumber] ?? []
+        if spaces.contains(where: { $0.uint64Value == dest }) { return (num, pid) }
+    }
+    return nil
+}
+
+func activateApp(onSpace dest: UInt64) {
+    guard let top = topWindow(onSpace: dest) else { return }
+    if NSWorkspace.shared.frontmostApplication?.processIdentifier != top.pid {
+        NSRunningApplication(processIdentifier: top.pid)?.activate()
+    }
+}
+
+// Map an AXUIElement window to its CGWindowID (private but ubiquitous).
+@_silgen_name("_AXUIElementGetWindow")
+func _AXUIElementGetWindow(_ element: AXUIElement, _ id: UnsafeMutablePointer<CGWindowID>) -> AXError
+
+// Re-order one window via Accessibility, without touching focus.
+func raiseWindow(number: UInt32, ownerPID pid: pid_t) {
+    let app = AXUIElementCreateApplication(pid)
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
+          let windows = value as? [AXUIElement] else { return }
+    for win in windows {
+        var wid: CGWindowID = 0
+        if _AXUIElementGetWindow(win, &wid) == .success, wid == number {
+            AXUIElementPerformAction(win, kAXRaiseAction as CFString)
+            return
+        }
+    }
+}
+
+func directSwitch(to dest: UInt64, info: SpaceInfo, ident: String) {
+    _ = SLSManagedDisplaySetIsAnimating(cid, ident as CFString, true)
+    SLSShowSpaces(cid, [NSNumber(value: dest)] as CFArray)
+    // Hide every other space on the display, not just the one the (possibly
+    // stale) bookkeeping claims is current — self-heals any earlier mismatch
+    // that left two spaces composited at once.
+    let others = info.ids.filter { $0 != dest }.map { NSNumber(value: $0) }
+    SLSHideSpaces(cid, others as CFArray)
+    _ = SLSManagedDisplaySetCurrentSpace(cid, ident as CFString, dest)
+    _ = SLSManagedDisplaySetIsAnimating(cid, ident as CFString, false)
+    if !skipActivation { activateLandingAppSoon(on: dest) }
+}
+
+// MARK: - Destination pre-warm (macOS 26 gesture path)
+
+// TESTED, DOESN'T HELP (off by default, NOSWOOSH_PRIME=1 re-enables): showing
+// the destination space via SLSShowSpaces before the gesture (mimicking the
+// Dock's WillSwitchSpaces step) wedged identically at 0ms and 16ms lead time.
+// Consistent with the root cause being surfaces DROPPED at commit teardown,
+// not never built — a pre-warm can't survive the teardown.
+// NOSWOOSH_PRIME_MS delays the gesture after the pre-warm (default 0).
+let primeEnabled = !needsAugmentation
+    && ProcessInfo.processInfo.environment["NOSWOOSH_PRIME"] == "1"
+let primeDelayMS: Int = {
+    if let raw = ProcessInfo.processInfo.environment["NOSWOOSH_PRIME_MS"],
+       let ms = Int(raw) {
+        return min(max(ms, 0), 500)
+    }
+    return 0
+}()
+
+// MARK: - Post-landing heal (macOS 26 gesture path)
+
+// Experimental, off by default: attempts to repair a wedged landing after the
+// fact. Results on 26.5.2 — none reliable: "show" does nothing; a guarded
+// activation heals only when focus hadn't moved; even unguarded
+// activate-all-windows left landings blank. Kept env-gated for future OS
+// builds. Timing note: an activation racing the transition is itself a proven
+// wedge trigger (the v1.5.1 regression), hence the enforced delay.
+// NOSWOOSH_HEAL: activate (unguarded, orders all windows forward)
+//   | raise (AXRaise the top landing-space window; no focus change)
+//   | show (re-SLSShowSpaces) | off (default).
+// NOSWOOSH_HEAL_MS: delay after the switch (default 200).
+enum HealMode { case activate, raise, show, off }
+let healMode: HealMode = {
+    if needsAugmentation { return .off }
+    switch ProcessInfo.processInfo.environment["NOSWOOSH_HEAL"] {
+    case "activate": return .activate
+    case "show": return .show
+    case "raise": return .raise
+    default: return .off
+    }
+}()
+let healDelayMS: Int = {
+    if let raw = ProcessInfo.processInfo.environment["NOSWOOSH_HEAL_MS"],
+       let ms = Int(raw) {
+        return min(max(ms, 50), 2000)
+    }
+    return 200
+}()
+var pendingHeal: DispatchWorkItem?
+func scheduleHeal(on dest: UInt64) {
+    if healMode == .off { return }
+    pendingHeal?.cancel()
+    let work = DispatchWorkItem {
+        switch healMode {
+        case .show:
+            SLSShowSpaces(cid, [NSNumber(value: dest)] as CFArray)
+        case .activate:
+            guard let top = topWindow(onSpace: dest) else { return }
+            NSRunningApplication(processIdentifier: top.pid)?
+                .activate(options: [.activateAllWindows])
+        case .raise:
+            guard let top = topWindow(onSpace: dest) else { return }
+            raiseWindow(number: top.num, ownerPID: top.pid)
+        case .off:
+            break
+        }
+    }
+    pendingHeal = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + Double(healDelayMS) / 1000.0, execute: work)
+}
+
 // MARK: - Switch core (both input sources call only this)
 
 // The gesture commits asynchronously, so on rapid presses the space list can be
@@ -315,10 +624,16 @@ func postSwitchGesture(right: Bool) {
             events.append(aug)
         }
         events.forEach(postPair)
-    } else {
+    } else if gestureDurationMS == 0 && gestureStyle == .iss {
+        postIssSequence(right: right)
+    } else if gestureDurationMS == 0 || gestureStyle == .zero {
         postDockSwipe(.began, right: right)
         postDockSwipe(.changed, right: right)
         postDockSwipe(.ended, right: right)
+    } else if gestureInFlight {
+        pendingSwitches.append(right)
+    } else {
+        postPacedDockSwipe(right: right)
     }
 }
 
@@ -330,14 +645,31 @@ func switchSpace(right: Bool) {
     var current = info.currentIndex
     // Prefer our prediction while the list may still be catching up, so a rapid
     // second switch is not blocked by a stale "you're at the edge" reading.
-    if let p = predictedIndex, Date().timeIntervalSince(predictionTime) < predictionWindow {
+    // While a paced gesture is in flight (or queued), the list definitely lags
+    // our intent, so the prediction stays authoritative regardless of age.
+    if let p = predictedIndex,
+       gestureInFlight || !pendingSwitches.isEmpty
+        || Date().timeIntervalSince(predictionTime) < predictionWindow {
         current = p
     }
     let target = current + (right ? 1 : -1)
     // Clamp at first/last space to avoid the rubber-band bounce animation
     // (on macOS 27 this also spares the Dock a swipe it would only reject).
     guard target >= 0, target < info.ids.count else { return }
-    postSwitchGesture(right: right)
+    let dest = info.ids[target]
+    if useDirectSwitch, let ident = info.displayIdent {
+        directSwitch(to: dest, info: info, ident: ident)
+    } else {
+        if primeEnabled { SLSShowSpaces(cid, [NSNumber(value: dest)] as CFArray) }
+        if primeEnabled && primeDelayMS > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(primeDelayMS) / 1000.0) {
+                postSwitchGesture(right: right)
+            }
+        } else {
+            postSwitchGesture(right: right)
+        }
+        scheduleHeal(on: dest)
+    }
     predictedIndex = target
     predictionTime = Date()
 }
@@ -360,8 +692,8 @@ if args.count > 1 {
         exit(0)
     case "left", "right":
         switchSpace(right: args[1] == "right")
-        // brief grace so the gesture events flush before exit
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.15))
+        // grace so the (possibly paced) gesture events flush before exit
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.15 + Double(gestureDurationMS) / 1000.0))
         exit(0)
     case "setup":
         setCtrlArrowShortcuts(enabled: false)
@@ -477,10 +809,16 @@ let swipeCallback: CGEventTapCallBack = { _, type, ev, _ in
 
     let et = ev.getIntegerValueField(fieldCGSEventType)
 
-    // Let our own synthetic events through without re-intercepting them.
-    if passthrough > 0 && (et == kCGSEventDockControl || et == kCGSEventGesture) {
-        passthrough -= 1
-        return pass
+    // Let our own synthetic events through without re-intercepting them
+    // (tagged on the 26 path, counted pairs on the 27 path).
+    if et == kCGSEventDockControl || et == kCGSEventGesture {
+        if ev.getIntegerValueField(.eventSourceUserData) == noswooshEventTag {
+            return pass
+        }
+        if passthrough > 0 {
+            passthrough -= 1
+            return pass
+        }
     }
 
     if et == kCGSEventDockControl
