@@ -1,8 +1,7 @@
 # noswoosh
 
-Instant, animation-free switching between macOS Spaces — by a **3-finger swipe**
-or **Ctrl+←/→**. Works on macOS 26 and 27, no SIP disabling, no global
-Reduce Motion.
+Instant, animation-free switching between macOS Spaces (**3-finger swipe** or
+**Ctrl+←/→**). Works on macOS 26 and 27, no SIP disabling, no global Reduce Motion.
 
 [![Latest release](https://img.shields.io/github/v/release/mmathys/noswoosh?color=blue)](https://github.com/mmathys/noswoosh/releases/latest)
 [![MIT license](https://img.shields.io/github/license/mmathys/noswoosh?color=blue)](LICENSE)
