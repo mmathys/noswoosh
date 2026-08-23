@@ -140,9 +140,6 @@ let fieldSwipePositionY = field(126)   // 27 payload
 let fieldSwipeVelocityX = field(129)
 let fieldSwipeVelocityY = field(130)
 let fieldGesturePhase   = field(132)
-let fieldPhaseAlias     = field(134)   // 27 path
-let fieldZoomDeltaY     = field(138)   // 27 path
-let fieldSourceAlias    = field(169)   // 27 path
 
 let kCGSEventGesture: Int64 = 29
 let kCGSEventDockControl: Int64 = 30
@@ -207,6 +204,8 @@ func generateIOHIDPayload(_ ev: CGEvent) -> [UInt8] {
     let velX    = ev.getDoubleValueField(fieldSwipeVelocityX)
     let velY    = ev.getDoubleValueField(fieldSwipeVelocityY)
     let mask    = ev.getIntegerValueField(fieldSwipeMask)
+    // The velocity record is required on macOS 27 (dropping it entirely stops the
+    // switch), even when the velocities are zero on the non-ended phases.
     let includeVelocity = velX != 0 || velY != 0 || phase == GesturePhase.ended.rawValue
 
     var p = [UInt8]()
@@ -267,10 +266,8 @@ func makeAugmentedDockEvent(_ phase: GesturePhase, right: Bool) -> CGEvent? {
     // On the 27 path direction is inverted: rightward = negative progress.
     ev.setDoubleValueField(fieldSwipeProgress, value: right ? -1.0 : 1.0)
     ev.setIntegerValueField(fieldSwipeMotion, value: kCGGestureMotionHorizontal)
-    ev.setIntegerValueField(fieldPhaseAlias, value: phase.rawValue)
-    ev.setDoubleValueField(fieldZoomDeltaY, value: 3.0)
-    ev.setDoubleValueField(fieldSourceAlias, value: Double(mach_absolute_time()))
     ev.setDoubleValueField(fieldSwipePositionX, value: 0.1)
+    // A strong "fling" velocity on the terminal phase is what commits the switch.
     if phase == .ended {
         ev.setDoubleValueField(fieldSwipeVelocityX, value: right ? -9999.0 : 9999.0)
     }
@@ -296,14 +293,19 @@ var predictionTime = Date.distantPast
 let predictionWindow = needsAugmentation ? 0.4 : 0.25
 
 func postSwitchGesture(right: Bool) {
+    // A began/changed/ended sequence must complete; a partial one leaves the Dock
+    // mid-gesture on a blank space. On the 27 path, build all three augmented
+    // events up front and post nothing if any fails to build, so we never emit a
+    // truncated sequence.
     if needsAugmentation {
+        var events: [CGEvent] = []
         for phase in [GesturePhase.began, .changed, .ended] {
-            if let dock = makeAugmentedDockEvent(phase, right: right), let aug = augment(dock) {
-                postPair(aug)
-            }
+            guard let dock = makeAugmentedDockEvent(phase, right: right),
+                  let aug = augment(dock) else { return }
+            events.append(aug)
         }
+        events.forEach(postPair)
     } else {
-        // Must send all three phases; two-phase sequences break Mission Control.
         postDockSwipe(.began, right: right)
         postDockSwipe(.changed, right: right)
         postDockSwipe(.ended, right: right)
@@ -524,6 +526,15 @@ if let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventT
     let src = CFMachPortCreateRunLoopSource(nil, tap, 0)
     CFRunLoopAddSource(CFRunLoopGetCurrent(), src, .commonModes)
     CGEvent.tapEnable(tap: tap, enable: true)
+    // The callback re-enables the tap when the system disables it, but a disable
+    // can arrive without a callback under load. Poll as a backstop so swipes never
+    // silently die until the next relaunch.
+    Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in
+        if AXIsProcessTrusted(), !CGEvent.tapIsEnabled(tap: tap) {
+            CGEvent.tapEnable(tap: tap, enable: true)
+            log("re-enabled swipe event tap")
+        }
+    }
 } else {
     // Fails when not (yet) trusted; the Accessibility poll above restarts us
     // once granted, and the fresh process creates the tap successfully.
