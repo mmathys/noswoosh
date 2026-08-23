@@ -1,11 +1,13 @@
 # noswoosh
 
 Instant, animation-free switching between macOS Spaces (**3-finger swipe** or
-**Ctrl+←/→**). Works on macOS 26 and 27, no SIP disabling, no global Reduce Motion.
+**Ctrl+←/→**). Works on **macOS 26.6+ and 27**, no SIP disabling, no global Reduce
+Motion. (macOS 26.0–26.5 has a WindowServer bug that breaks instant switching —
+see [Caveats](#caveats).)
 
 [![Latest release](https://img.shields.io/github/v/release/mmathys/noswoosh?color=blue)](https://github.com/mmathys/noswoosh/releases/latest)
 [![MIT license](https://img.shields.io/github/license/mmathys/noswoosh?color=blue)](LICENSE)
-![macOS 26–27](https://img.shields.io/badge/macOS-26%E2%80%9327-lightgrey)
+![macOS 26.6+ / 27](https://img.shields.io/badge/macOS-26.6%2B%20%2F%2027-lightgrey)
 
 ![Side-by-side: the macOS space-switch animation versus noswoosh switching instantly](assets/demo.gif)
 
@@ -150,6 +152,17 @@ based on most recent use" in System Settings → Desktop & Dock.
 
 ## Caveats
 
+- **macOS 26.0–26.5 is not supported** (Apple fixed the underlying bug by 26.6).
+  Those builds have a WindowServer race where a zero-travel synthetic switch drops the
+  destination space's window compositing surfaces: the switch itself works, but you can
+  land on a space whose windows never paint (blank wallpaper) until something re-orders
+  them. The full investigation — root cause, every attempted workaround (alternate event
+  shapes, phase pacing, surface pre-warming, post-landing heals, direct SkyLight
+  switching), and why each fails — is in
+  [issue #1](https://github.com/mmathys/noswoosh/issues/1). If you're stuck on
+  26.0–26.5, the one reliable mitigation is `NOSWOOSH_GESTURE_STYLE=ramp` in the
+  daemon's environment: it replaces the instant cut with a fast ~40ms slide that gives
+  WindowServer the transition frames it needs.
 - **Private APIs.** `SLSCopyManagedDisplaySpaces`, the undocumented gesture
   `CGEventField`s, and the macOS 27 IOHID payload layout are all unsupported by Apple
   and reverse-engineered — any macOS release can change them. When a release does, the
