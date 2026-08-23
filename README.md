@@ -104,39 +104,32 @@ uses the original lightweight path unchanged.
 > long-dead Snow Leopard setting `workspaces-swoosh-animation-off`. This is that
 > setting, resurrected.
 
-### The empty-desktop yank (optional)
+### The empty-desktop yank
 
-While building this we found a macOS behavior, reproducible with plain native
+While building this we found a macOS behavior reproducible with plain native
 switching: **switch to a desktop with no windows, and ~400 ms later macOS yanks you to
-a different desktop.** The chain, visible in the Dock's log:
+a different desktop.** The chain of events, visible in the Dock's log:
 
-1. Landing on a windowless space, WindowServer re-promotes the last-active app to front
-   process.
+1. Landing on a windowless space, WindowServer re-promotes the last-active app to
+   front process.
 2. That app (AppKit) re-orders its key window — which lives on another space.
 3. The Dock's window-order follow rule fires (`switching to space N for window ordered
-   on non-visible space`) and you're pulled to wherever that window lives.
+   on non-visible space`) and you're yanked to wherever that window lives.
 
-The Dock registers for that follow notification at startup only when the legacy pref
-`workspaces-auto-swoosh` is true (the default). Setting it to `NO` kills the yank
-outright — but the **same rule** is what makes clicking a Dock icon jump you to the
-space its window is already on. You can't split them: one pref, both behaviors.
-
-noswoosh **leaves this at the macOS default** and does not touch it. The yank is rare
-and self-correcting — it only fires the *first* time you visit a given windowless space,
-and switching again lands you where you meant to go — whereas disabling the follow rule
-permanently removes Dock-icon-follow, a standard feature. Trading a daily convenience
-for a rare, transient blip isn't a call a space switcher should make for you.
-
-If you never rely on Dock-icon-follow and the yank bothers you more, opt in yourself:
+Disassembling the Dock shows this follow rule is a **separate code path** from the
+"switch to a Space with open windows when switching to an application" setting
+(`AppleSpacesSwitchOnActivate` — disabling that does *not* help). The Dock registers
+for the underlying WindowServer notification at startup only when the legacy pref
+`workspaces-auto-swoosh` is true, which is the default. Hence the fix, fittingly a
+sibling of the extinct key this tool is named after:
 
 ```sh
-defaults write com.apple.dock workspaces-auto-swoosh -bool NO && killall Dock
-# undo: defaults delete com.apple.dock workspaces-auto-swoosh && killall Dock
+defaults write com.apple.dock workspaces-auto-swoosh -bool NO
+killall Dock
 ```
 
-(Note: disabling that follow rule is a *separate* code path from the "switch to a Space
-with open windows when switching to an application" setting,
-`AppleSpacesSwitchOnActivate` — toggling that one does not affect the yank.)
+`noswoosh setup` applies this. Side effect, arguably a feature: a window opening on
+another space no longer auto-drags you to it.
 
 ## Troubleshooting
 
@@ -184,8 +177,8 @@ based on most recent use" in System Settings → Desktop & Dock.
 brew uninstall --cask noswoosh     # or: ./scripts/uninstall.sh, from source
 ```
 
-This stops the daemon, removes the LaunchAgent, and restores the system Ctrl+arrow
-shortcuts that `setup` disabled. Remove the Accessibility entry manually if you like.
+This stops the daemon, removes the LaunchAgent, and restores both system settings that
+`setup` changed. Remove the Accessibility entry manually if you like.
 
 ## Contributing
 

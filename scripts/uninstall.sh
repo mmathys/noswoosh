@@ -11,12 +11,13 @@ echo "==> Stopping and removing LaunchAgent"
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 rm -f "$PLIST"
 
-echo "==> Restoring system defaults (re-enabling the animated Ctrl+arrow shortcuts)"
+echo "==> Restoring system defaults (shortcuts + Dock space-follow; restarts the Dock)"
 if [ -x "$BIN_DIR/noswoosh" ]; then
     "$BIN_DIR/noswoosh" teardown
 else
     echo "    noswoosh binary missing — re-enable Ctrl+arrows in System Settings >"
-    echo "    Keyboard > Keyboard Shortcuts > Mission Control."
+    echo "    Keyboard > Keyboard Shortcuts > Mission Control, and run:"
+    echo "    defaults delete com.apple.dock workspaces-auto-swoosh && killall Dock"
 fi
 
 echo "==> Removing binaries and source"

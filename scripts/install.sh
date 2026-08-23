@@ -31,7 +31,7 @@ echo "==> Installing to $BIN_DIR"
 mkdir -p "$BIN_DIR"
 cp noswoosh noswoosh.swift "$BIN_DIR/"
 
-echo "==> Configuring system (disabling the animated Ctrl+arrow shortcuts)"
+echo "==> Configuring system (shortcuts + empty-desktop yank fix; restarts the Dock)"
 "$BIN_DIR/noswoosh" setup
 
 echo "==> Installing LaunchAgent $LABEL"
