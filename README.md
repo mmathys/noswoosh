@@ -159,10 +159,11 @@ based on most recent use" in System Settings → Desktop & Dock.
   them. The full investigation — root cause, every attempted workaround (alternate event
   shapes, phase pacing, surface pre-warming, post-landing heals, direct SkyLight
   switching), and why each fails — is in
-  [issue #1](https://github.com/mmathys/noswoosh/issues/1). If you're stuck on
-  26.0–26.5, the one reliable mitigation is `NOSWOOSH_GESTURE_STYLE=ramp` in the
-  daemon's environment: it replaces the instant cut with a fast ~40ms slide that gives
-  WindowServer the transition frames it needs.
+  [issue #1](https://github.com/mmathys/noswoosh/issues/1). **The fix is to update
+  macOS to 26.6 or later.** If you can't update yet (e.g. managed devices with
+  deferred updates), the one reliable mitigation is `NOSWOOSH_GESTURE_STYLE=ramp` in
+  the daemon's environment: it replaces the instant cut with a fast ~40ms slide that
+  gives WindowServer the transition frames it needs.
 - **Private APIs.** `SLSCopyManagedDisplaySpaces`, the undocumented gesture
   `CGEventField`s, and the macOS 27 IOHID payload layout are all unsupported by Apple
   and reverse-engineered — any macOS release can change them. When a release does, the
