@@ -158,19 +158,6 @@ launchctl kickstart -k gui/$(id -u)/ax.max.noswoosh
 **Spaces switch in an unexpected order.** Turn off "Automatically rearrange Spaces
 based on most recent use" in System Settings → Desktop & Dock.
 
-## Compatibility
-
-Verified on **macOS 26 and 27**, Apple Silicon. The gesture pipeline changed between
-them, so noswoosh checks the running OS at launch and picks the right path:
-
-| macOS | Path | Verified |
-| --- | --- | --- |
-| 26 | Lightweight synthetic Dock swipe | Ctrl+arrow and 3-finger swipe |
-| 27 | Same, plus the serialized IOHID payload 27 requires | Ctrl+arrow; swipe shares the same verified switch core |
-
-Keyboard and swipe are independent inputs, so a change that affects one leaves the
-other working.
-
 ## Caveats
 
 - **Private APIs.** `SLSCopyManagedDisplaySpaces`, the undocumented gesture
