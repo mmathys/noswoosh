@@ -289,9 +289,11 @@ func postPair(_ dock: CGEvent) {
 // MARK: - Switch core (both input sources call only this)
 
 // The gesture commits asynchronously, so on rapid presses the space list can be
-// stale. Trust our own prediction for a short window after a switch.
+// stale. Trust our own prediction for a short window after a switch. macOS 27's
+// list settles slower after a synthetic switch, so give it a wider window.
 var predictedIndex: Int?
 var predictionTime = Date.distantPast
+let predictionWindow = needsAugmentation ? 0.4 : 0.25
 
 func postSwitchGesture(right: Bool) {
     if needsAugmentation {
@@ -309,22 +311,19 @@ func postSwitchGesture(right: Bool) {
 }
 
 func switchSpace(right: Bool) {
-    // On macOS 27 the space list lags behind the Dock after a synthetic switch,
-    // so skip the boundary pre-check and let the Dock clamp at the ends itself.
-    if needsAugmentation {
-        postSwitchGesture(right: right)
-        return
-    }
     guard let info = spaceInfo() else {
         postSwitchGesture(right: right)
         return
     }
     var current = info.currentIndex
-    if let p = predictedIndex, Date().timeIntervalSince(predictionTime) < 0.25 {
+    // Prefer our prediction while the list may still be catching up, so a rapid
+    // second switch is not blocked by a stale "you're at the edge" reading.
+    if let p = predictedIndex, Date().timeIntervalSince(predictionTime) < predictionWindow {
         current = p
     }
     let target = current + (right ? 1 : -1)
-    // Clamp at first/last space to avoid the rubber-band bounce animation.
+    // Clamp at first/last space to avoid the rubber-band bounce animation
+    // (on macOS 27 this also spares the Dock a swipe it would only reject).
     guard target >= 0, target < info.ids.count else { return }
     postSwitchGesture(right: right)
     predictedIndex = target
