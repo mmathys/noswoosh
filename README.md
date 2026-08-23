@@ -2,8 +2,7 @@
 
 Instant, animation-free switching between macOS Spaces (**3-finger swipe** or
 **Ctrl+←/→**). Works on **macOS 26.6+ and 27**, no SIP disabling, no global Reduce
-Motion. (macOS 26.0–26.5 has a WindowServer bug that breaks instant switching —
-see [Caveats](#caveats).)
+Motion.
 
 [![Latest release](https://img.shields.io/github/v/release/mmathys/noswoosh?color=blue)](https://github.com/mmathys/noswoosh/releases/latest)
 [![MIT license](https://img.shields.io/github/license/mmathys/noswoosh?color=blue)](LICENSE)
