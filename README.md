@@ -69,15 +69,6 @@ noswoosh teardown
 noswoosh version
 ```
 
-### What `setup` changes
-
-Both are user-level; no `sudo`, no SIP changes. `noswoosh teardown` reverses both.
-
-| Change | Why |
-| --- | --- |
-| Disables the system's animated Ctrl+←/→ shortcuts (symbolic hotkeys 79/81) | They'd otherwise consume the key combo first. Ctrl+Shift+arrows and all other shortcuts are untouched. |
-| `defaults write com.apple.dock workspaces-auto-swoosh -bool NO` | Fixes the [empty-desktop yank](#the-empty-desktop-yank). Restarts the Dock. |
-
 ## How it works
 
 macOS has no supported way to disable *only* the space-switch slide animation:
