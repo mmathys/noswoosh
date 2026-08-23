@@ -2,7 +2,7 @@ import Cocoa
 import Carbon.HIToolbox
 import ApplicationServices
 
-// noswoosh — instant macOS space switching (macOS 12–27, Apple Silicon + Intel).
+// noswoosh — instant macOS space switching (verified on macOS 26 and 27, Apple Silicon).
 //
 //   noswoosh            daemon: Ctrl+Left/Right OR a 3-finger swipe switch
 //                       spaces instantly (no animation)
@@ -26,7 +26,7 @@ import ApplicationServices
 // DockControl event must be paired with a companion gesture event. Without this
 // the Dock silently ignores the event. The macOS 27 payload layout is
 // reverse-engineered from joshuarli/iss (ISC). Everything 27-specific is gated
-// behind `needsAugmentation`, so the verified macOS 12–26 path is untouched.
+// behind `needsAugmentation`, so the verified macOS 26 path is untouched.
 //
 // Two Dock settings matter; `noswoosh setup` configures both:
 // - The system's animated Ctrl+arrow shortcuts (symbolic hotkeys 79/81) must
@@ -159,7 +159,7 @@ enum GesturePhase: Int64 { case began = 1, changed = 2, ended = 4, cancelled = 8
 // (no tap runs) since the process exits promptly.
 var passthrough = 0
 
-// MARK: macOS 12–26 path — bare Dock-swipe, near-zero progress
+// MARK: pre-27 path (macOS 26) — bare Dock-swipe, near-zero progress
 
 func postDockSwipe(_ phase: GesturePhase, right: Bool) {
     guard let ev = CGEvent(source: nil) else { return }

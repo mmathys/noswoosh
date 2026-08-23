@@ -1,12 +1,12 @@
 # noswoosh
 
 Instant, animation-free switching between macOS Spaces — by **Ctrl+←/→** or a
-**3-finger swipe**. Works on macOS 12 through 27, no SIP disabling, no global
+**3-finger swipe**. Works on macOS 26 and 27, no SIP disabling, no global
 Reduce Motion.
 
 [![Latest release](https://img.shields.io/github/v/release/mmathys/noswoosh?color=blue)](https://github.com/mmathys/noswoosh/releases/latest)
 [![MIT license](https://img.shields.io/github/license/mmathys/noswoosh?color=blue)](LICENSE)
-![macOS 12–27](https://img.shields.io/badge/macOS-12%E2%80%9327-lightgrey)
+![macOS 26–27](https://img.shields.io/badge/macOS-26%E2%80%9327-lightgrey)
 
 ![Side-by-side: the macOS space-switch animation versus noswoosh switching instantly](assets/demo.gif)
 
@@ -105,8 +105,8 @@ the tap, so if the tap is ever disabled by the system, Ctrl+←/→ keeps workin
 
 **macOS 27** tightened this up: it validates synthetic Dock swipes against a serialized
 IOHID payload the older technique doesn't carry, so pre-27 builds silently stop
-switching. noswoosh detects the running OS and, on 27+, attaches that payload (layout
-reverse-engineered from [joshuarli/iss](https://github.com/joshuarli/iss)); on 12–26 it
+switching. noswoosh detects the running OS and, on 27, attaches that payload (layout
+reverse-engineered from [joshuarli/iss](https://github.com/joshuarli/iss)); on 26 it
 uses the original lightweight path unchanged.
 
 > The name: *swoosh* is Apple's own word for the space-slide animation, from the
@@ -160,32 +160,29 @@ based on most recent use" in System Settings → Desktop & Dock.
 
 ## Compatibility
 
-Supports **macOS 12 (Monterey) through 27**. The gesture pipeline changed across these
-releases, so noswoosh checks the running OS at launch and picks the right path:
+Verified on **macOS 26 and 27**, Apple Silicon. The gesture pipeline changed between
+them, so noswoosh checks the running OS at launch and picks the right path:
 
 | macOS | Path | Verified |
 | --- | --- | --- |
-| 12–26 | Lightweight synthetic Dock swipe | Ctrl+arrow and swipe on 26 |
-| 27+ | Same, plus the serialized IOHID payload 27 requires | Ctrl+arrow on 27; swipe shares the same verified switch core |
+| 26 | Lightweight synthetic Dock swipe | Ctrl+arrow and 3-finger swipe |
+| 27 | Same, plus the serialized IOHID payload 27 requires | Ctrl+arrow; swipe shares the same verified switch core |
 
 Keyboard and swipe are independent inputs, so a change that affects one leaves the
-other working. Both Apple Silicon and Intel are supported.
+other working.
 
 ## Caveats
 
 - **Private APIs.** `SLSCopyManagedDisplaySpaces`, the undocumented gesture
   `CGEventField`s, and the macOS 27 IOHID payload layout are all unsupported by Apple
   and reverse-engineered — any macOS release can change them. When a release does, the
-  symptom is switches silently stopping; the fix is adapting the gesture payload (as
-  the 12–26 → 27 change already required). noswoosh gates each path behind a runtime OS
-  check so a future break can be isolated to one path.
-- **Apple Silicon quirk (12–26 path).** The reference implementations use
+  symptom is switches silently stopping; the fix is adapting the gesture payload (as the
+  26 → 27 change already required). noswoosh gates each path behind a runtime OS check so
+  a future break can be isolated to one path.
+- **Apple Silicon quirk (macOS 26 path).** The reference implementations use
   `FLT_TRUE_MIN` as the gesture progress; that subnormal float is flushed to zero (sign
   lost) somewhere in the event pipeline on Apple Silicon, making every switch go the
   same direction. This port uses `1e-4`, which survives and is still visually zero.
-
-Verified on **macOS 26** (Ctrl+arrow and 3-finger swipe) and **macOS 27** (Ctrl+arrow),
-Apple Silicon. The underlying technique is known to work on macOS 14 and 15 as well.
 
 ## Uninstall
 

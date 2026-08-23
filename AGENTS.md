@@ -9,8 +9,10 @@ code can't tell you.
 Two input sources — the Ctrl+arrow hotkey and an event tap that intercepts real
 3-finger swipes — both call one `switchSpace(right:)` core. The core has two posting
 paths chosen by `needsAugmentation` (runtime `kern.osproductversion >= 27`): the
-lightweight macOS 12–26 path, and the macOS 27+ path that attaches a serialized IOHID
-payload. Keep new work behind that gate so a change to one OS can't regress the other.
+lightweight pre-27 path (verified on macOS 26), and the macOS 27+ path that attaches a
+serialized IOHID payload. Keep new work behind that gate so a change to one OS can't
+regress the other. Verified on macOS 26 and 27 only — don't claim older releases the
+pre-27 path *should* handle but nobody has tested.
 
 ## Build and release
 
@@ -46,7 +48,7 @@ post emits, update the bump in lockstep or the tap will eat its own output or ac
 twice.
 
 **macOS 27 reverses swipe direction.** `isRightSwipe` and `makeAugmentedDockEvent` flip
-the progress/velocity sign versus the 12–26 path. If direction is backwards on one OS
+the progress/velocity sign versus the pre-27 path. If direction is backwards on one OS
 but right on the other, this is why — check the `needsAugmentation` branch, not the
 field constants.
 
