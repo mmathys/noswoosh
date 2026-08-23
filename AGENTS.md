@@ -27,6 +27,9 @@ publishes, and bumps the cask in `mmathys/homebrew-tap`. The workflow header lis
 secrets; each group degrades to a skip when absent. Only edit the tap by hand if the
 bump step reported a skip or a warning.
 
+The tap release is fully automatic: the tag push triggers CI, which opens/merges the
+cask bump in `mmathys/homebrew-tap` — never clone or push that repo by hand.
+
 ## Traps
 
 **Don't tidy the private-API constants.** The numeric `CGEventField`s and the `1e-4`
