@@ -1,11 +1,12 @@
 # noswoosh
 
-Instant, animation-free switching between macOS Spaces with **Ctrl+←/→**.
-No SIP disabling, no global Reduce Motion.
+Instant, animation-free switching between macOS Spaces — by **Ctrl+←/→** or a
+**3-finger swipe**. Works on macOS 12 through 27, no SIP disabling, no global
+Reduce Motion.
 
 [![Latest release](https://img.shields.io/github/v/release/mmathys/noswoosh?color=blue)](https://github.com/mmathys/noswoosh/releases/latest)
 [![MIT license](https://img.shields.io/github/license/mmathys/noswoosh?color=blue)](LICENSE)
-![macOS 12+](https://img.shields.io/badge/macOS-12%2B-lightgrey)
+![macOS 12–27](https://img.shields.io/badge/macOS-12%E2%80%9327-lightgrey)
 
 ![Side-by-side: the macOS space-switch animation versus noswoosh switching instantly](assets/demo.gif)
 
@@ -23,8 +24,8 @@ it's the one step that can't be scripted. Approve the prompt on first start; if 
 dismiss it, noswoosh opens **System Settings → Privacy & Security → Accessibility**
 for you, where you can add `/Applications/noswoosh.app` yourself.
 
-That's it — the daemon picks the grant up within a second, and **Ctrl+←/→** switches
-spaces instantly.
+That's it — the daemon picks the grant up within a second, and both **Ctrl+←/→** and a
+**3-finger horizontal swipe** switch spaces instantly.
 
 <details>
 <summary><b>Build from source instead</b></summary>
@@ -48,8 +49,14 @@ build, which keeps the grant across rebuilds.
 
 ## Usage
 
-**Ctrl+→ / Ctrl+←** switches one space right/left, instantly. Movement is clamped at
-the first and last space, so there's no rubber-band bounce.
+Two ways to switch, both instant:
+
+- **Ctrl+→ / Ctrl+←** — one space right/left.
+- **3-finger horizontal swipe** — your normal Spaces gesture, minus the animation.
+  noswoosh intercepts the real swipe and replaces it with an instant switch;
+  vertical swipes (Mission Control, App Exposé) are left untouched.
+
+Movement is clamped at the first and last space, so there's no rubber-band bounce.
 
 A CLI is available for scripting and debugging:
 
@@ -90,6 +97,18 @@ runs through the Dock's own pipeline — so Mission Control, focus, wallpaper an
 state all stay consistent — but the animation has zero distance to travel, making it
 instant.
 
+Two input sources feed one switch core. A Ctrl+arrow **hotkey** posts the synthetic
+switch directly. An **event tap** watches for real 3-finger horizontal swipes,
+suppresses them before the Dock animates, and posts the same instant switch — so a
+natural swipe still works, just without the slide. The keyboard path never depends on
+the tap, so if the tap is ever disabled by the system, Ctrl+←/→ keeps working.
+
+**macOS 27** tightened this up: it validates synthetic Dock swipes against a serialized
+IOHID payload the older technique doesn't carry, so pre-27 builds silently stop
+switching. noswoosh detects the running OS and, on 27+, attaches that payload (layout
+reverse-engineered from [joshuarli/iss](https://github.com/joshuarli/iss)); on 12–26 it
+uses the original lightweight path unchanged.
+
 > The name: *swoosh* is Apple's own word for the space-slide animation, from the
 > long-dead Snow Leopard setting `workspaces-swoosh-animation-off`. This is that
 > setting, resurrected.
@@ -123,10 +142,11 @@ another space no longer auto-drags you to it.
 
 ## Troubleshooting
 
-**Ctrl+arrows do nothing.** Check `~/Library/Logs/noswoosh.log`. A
+**Ctrl+arrows or swipes do nothing.** Check `~/Library/Logs/noswoosh.log`. A
 `waiting for Accessibility permission` line as the last entry means the daemon still
 isn't trusted; once you grant it, the log shows `Accessibility granted` and the daemon
-restarts itself.
+restarts itself. A `could not create swipe event tap` line means the same thing — the
+tap needs Accessibility, and the restart after granting fixes it.
 
 **The Accessibility checkbox won't stick.** Remove the entry with "−" and let the
 daemon re-trigger the prompt, then approve it. If it still won't take:
@@ -138,20 +158,34 @@ launchctl kickstart -k gui/$(id -u)/ax.max.noswoosh
 **Spaces switch in an unexpected order.** Turn off "Automatically rearrange Spaces
 based on most recent use" in System Settings → Desktop & Dock.
 
+## Compatibility
+
+Supports **macOS 12 (Monterey) through 27**. The gesture pipeline changed across these
+releases, so noswoosh checks the running OS at launch and picks the right path:
+
+| macOS | Path | Verified |
+| --- | --- | --- |
+| 12–26 | Lightweight synthetic Dock swipe | Ctrl+arrow and swipe on 26 |
+| 27+ | Same, plus the serialized IOHID payload 27 requires | Ctrl+arrow on 27; swipe shares the same verified switch core |
+
+Keyboard and swipe are independent inputs, so a change that affects one leaves the
+other working. Both Apple Silicon and Intel are supported.
+
 ## Caveats
 
-- **Private APIs.** `SLSCopyManagedDisplaySpaces`, `SLSCopySpacesForWindows`,
-  `_SLPSSetFrontProcessWithOptions` and the undocumented gesture `CGEventField`s are
-  unsupported by Apple and can break in any macOS release. (Known: macOS 27 betas
-  changed gesture-event serialization — see WhichSpace for the IOHID-payload
-  adaptation.)
-- **Apple Silicon quirk.** The reference implementations use `FLT_TRUE_MIN` as the
-  gesture progress; that subnormal float is flushed to zero (sign lost) somewhere in
-  the event pipeline on macOS 26/arm64, making every switch go the same direction.
-  This port uses `1e-4`, which survives and is still visually zero.
+- **Private APIs.** `SLSCopyManagedDisplaySpaces`, the undocumented gesture
+  `CGEventField`s, and the macOS 27 IOHID payload layout are all unsupported by Apple
+  and reverse-engineered — any macOS release can change them. When a release does, the
+  symptom is switches silently stopping; the fix is adapting the gesture payload (as
+  the 12–26 → 27 change already required). noswoosh gates each path behind a runtime OS
+  check so a future break can be isolated to one path.
+- **Apple Silicon quirk (12–26 path).** The reference implementations use
+  `FLT_TRUE_MIN` as the gesture progress; that subnormal float is flushed to zero (sign
+  lost) somewhere in the event pipeline on Apple Silicon, making every switch go the
+  same direction. This port uses `1e-4`, which survives and is still visually zero.
 
-Verified on **macOS 26 (Tahoe)**, Apple Silicon. The underlying technique is known to
-work on macOS 14 and 15 as well.
+Verified on **macOS 26** (Ctrl+arrow and 3-finger swipe) and **macOS 27** (Ctrl+arrow),
+Apple Silicon. The underlying technique is known to work on macOS 14 and 15 as well.
 
 ## Uninstall
 
@@ -164,7 +198,7 @@ This stops the daemon, removes the LaunchAgent, and restores both system setting
 
 ## Contributing
 
-Issues and pull requests are welcome. The whole tool is one ~250-line Swift file
+Issues and pull requests are welcome. The whole tool is one Swift file
 ([`noswoosh.swift`](noswoosh.swift)); build it with:
 
 ```sh
@@ -180,6 +214,8 @@ CI builds, signs and publishes the app and updates the Homebrew cask.
 - Gesture technique: [jurplel/InstantSpaceSwitcher](https://github.com/jurplel/InstantSpaceSwitcher)
   (the `±FLT_TRUE_MIN` progress trick and three-phase gesture) and
   [gechr/WhichSpace](https://github.com/gechr/WhichSpace).
+- macOS 27 IOHID payload and swipe-interception approach:
+  [joshuarli/iss](https://github.com/joshuarli/iss) (ISC).
 - Force-front technique: [koekeishiya/yabai](https://github.com/koekeishiya/yabai).
 
 ## License
