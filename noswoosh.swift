@@ -92,20 +92,30 @@ func SLSMainConnectionID() -> CGSConnectionID
 @_silgen_name("SLSCopyManagedDisplaySpaces")
 func SLSCopyManagedDisplaySpaces(_ cid: CGSConnectionID) -> Unmanaged<CFArray>
 
+@_silgen_name("SLSGetActiveSpace")
+func SLSGetActiveSpace(_ cid: CGSConnectionID) -> UInt64
+
 let cid = SLSMainConnectionID()
 
 struct SpaceInfo { let ids: [UInt64]; let currentIndex: Int }
 
-// Lists ALL spaces (desktops + fullscreen apps): the swipe gesture traverses
-// fullscreen spaces too, so boundary math must include them.
+// Space list for the display that owns the currently active space, plus the
+// active space's index in it. Keying off the global active space (not
+// displays.first) keeps boundary math correct on multi-display setups, where the
+// switch lands on whichever display has focus. On a single display this is
+// exactly the first display. The list includes fullscreen spaces, which the
+// swipe traverses too.
 func spaceInfo() -> SpaceInfo? {
     let displays = SLSCopyManagedDisplaySpaces(cid).takeRetainedValue() as! [[String: Any]]
-    guard let display = displays.first,
-          let spaces = display["Spaces"] as? [[String: Any]] else { return nil }
-    let curID = ((display["Current Space"] as? [String: Any])?["id64"] as? NSNumber)?.uint64Value ?? 0
-    let ids = spaces.compactMap { ($0["id64"] as? NSNumber)?.uint64Value }
-    guard let currentIndex = ids.firstIndex(of: curID) else { return nil }
-    return SpaceInfo(ids: ids, currentIndex: currentIndex)
+    let active = SLSGetActiveSpace(cid)
+    for display in displays {
+        guard let spaces = display["Spaces"] as? [[String: Any]] else { continue }
+        let ids = spaces.compactMap { ($0["id64"] as? NSNumber)?.uint64Value }
+        if let idx = ids.firstIndex(of: active) {
+            return SpaceInfo(ids: ids, currentIndex: idx)
+        }
+    }
+    return nil
 }
 
 // MARK: - macOS version gate
