@@ -34,23 +34,18 @@ import ApplicationServices
 // reverse-engineered from joshuarli/iss (ISC). Everything 27-specific is gated
 // behind `needsAugmentation`, so the verified macOS 26 path is untouched.
 //
-// Two Dock settings matter; `noswoosh setup` configures both:
-// - The system's animated Ctrl+arrow shortcuts (symbolic hotkeys 79/81) must
-//   be disabled or they consume the key combo first. Setup disables them
-//   live via SkyLight (defaults alone doesn't affect the running session)
-//   AND persists them in com.apple.symbolichotkeys for future logins.
-// - `defaults write com.apple.dock workspaces-auto-swoosh -bool NO` + Dock
-//   restart. Without it, landing on a WINDOWLESS space makes macOS yank you
-//   away ~400ms later: WindowServer re-promotes the last-active app, that app
-//   re-orders its key window (which lives on another space), and the Dock's
-//   window-order follow rule — registered at Dock startup only when this key
-//   is true — switches to it ("switching to space N for window ordered on
-//   non-visible space" in the Dock log). This affects native switching too.
+// `noswoosh setup` configures one thing: the system's animated Ctrl+arrow
+// shortcuts (symbolic hotkeys 79/81) must be disabled or they consume the key
+// combo first. Setup disables them live via SkyLight (defaults alone doesn't
+// affect the running session) AND persists them in com.apple.symbolichotkeys
+// for future logins. (For migration it also clears the legacy
+// com.apple.dock workspaces-auto-swoosh override older versions set — see the
+// setup case for why we no longer touch that setting.)
 //
 // Build: swiftc noswoosh.swift -O -o noswoosh \
 //          -F /System/Library/PrivateFrameworks -framework SkyLight
 
-let noswooshVersion = "1.6.2"
+let noswooshVersion = "1.6.3"
 
 // MARK: - Setup / teardown (system configuration, all user-level)
 
@@ -381,21 +376,27 @@ if args.count > 1 {
         exit(0)
     case "setup":
         setCtrlArrowShortcuts(enabled: false)
-        _ = runTool("/usr/bin/defaults", ["write", "com.apple.dock", "workspaces-auto-swoosh", "-bool", "NO"])
-        _ = runTool("/usr/bin/killall", ["Dock"])
+        // Older versions disabled the Dock's window-order space-follow
+        // (workspaces-auto-swoosh) to hide the empty-desktop yank. That yank is a
+        // rare, self-correcting macOS behavior (only the first visit to a windowless
+        // space), whereas disabling the follow permanently removed dock-icon-follow —
+        // a standard feature people use daily. A space switcher shouldn't quietly
+        // reshape Dock activation, so we no longer touch it. Clear any override a
+        // prior setup left (restoring the default), and restart the Dock only if we
+        // actually removed one.
+        if runTool("/usr/bin/defaults", ["delete", "com.apple.dock", "workspaces-auto-swoosh"]) {
+            _ = runTool("/usr/bin/killall", ["Dock"])
+        }
         print("""
         noswoosh setup complete:
           - system animated Ctrl+arrow shortcuts disabled (live + persisted)
-          - Dock window-order space-follow disabled (empty-desktop yank fix; Dock restarted)
         Remaining: start the daemon (brew services start noswoosh, or the
         LaunchAgent from install.sh) and grant it Accessibility permission.
         """)
         exit(0)
     case "teardown":
         setCtrlArrowShortcuts(enabled: true)
-        _ = runTool("/usr/bin/defaults", ["delete", "com.apple.dock", "workspaces-auto-swoosh"])
-        _ = runTool("/usr/bin/killall", ["Dock"])
-        print("noswoosh teardown complete: system Ctrl+arrow shortcuts re-enabled, Dock space-follow restored.")
+        print("noswoosh teardown complete: system Ctrl+arrow shortcuts re-enabled.")
         exit(0)
     case "version", "--version":
         print("noswoosh \(noswooshVersion)")
