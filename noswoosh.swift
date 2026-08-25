@@ -34,23 +34,18 @@ import ApplicationServices
 // reverse-engineered from joshuarli/iss (ISC). Everything 27-specific is gated
 // behind `needsAugmentation`, so the verified macOS 26 path is untouched.
 //
-// Two Dock settings matter; `noswoosh setup` configures both:
-// - The system's animated Ctrl+arrow shortcuts (symbolic hotkeys 79/81) must
-//   be disabled or they consume the key combo first. Setup disables them
-//   live via SkyLight (defaults alone doesn't affect the running session)
-//   AND persists them in com.apple.symbolichotkeys for future logins.
-// - `defaults write com.apple.dock workspaces-auto-swoosh -bool NO` + Dock
-//   restart. Without it, landing on a WINDOWLESS space makes macOS yank you
-//   away ~400ms later: WindowServer re-promotes the last-active app, that app
-//   re-orders its key window (which lives on another space), and the Dock's
-//   window-order follow rule — registered at Dock startup only when this key
-//   is true — switches to it ("switching to space N for window ordered on
-//   non-visible space" in the Dock log). This affects native switching too.
+// `noswoosh setup` configures one thing: the system's animated Ctrl+arrow
+// shortcuts (symbolic hotkeys 79/81) must be disabled or they consume the key
+// combo first. Setup disables them live via SkyLight (defaults alone doesn't
+// affect the running session) AND persists them in com.apple.symbolichotkeys
+// for future logins. (For migration it also clears the legacy
+// com.apple.dock workspaces-auto-swoosh override older versions set — see the
+// yank guard below and the setup case for why we no longer touch it.)
 //
 // Build: swiftc noswoosh.swift -O -o noswoosh \
 //          -F /System/Library/PrivateFrameworks -framework SkyLight
 
-let noswooshVersion = "1.6.4"
+let noswooshVersion = "1.7.0"
 
 // MARK: - Setup / teardown (system configuration, all user-level)
 
@@ -101,6 +96,11 @@ func SLSCopyManagedDisplaySpaces(_ cid: CGSConnectionID) -> Unmanaged<CFArray>
 @_silgen_name("SLSGetActiveSpace")
 func SLSGetActiveSpace(_ cid: CGSConnectionID) -> UInt64
 
+// Returns the union of spaces the given windows live on (mask 0x7 = all).
+@_silgen_name("SLSCopySpacesForWindows")
+func SLSCopySpacesForWindows(_ cid: CGSConnectionID, _ mask: Int32,
+                             _ windows: CFArray) -> Unmanaged<CFArray>
+
 let cid = SLSMainConnectionID()
 
 struct SpaceInfo { let ids: [UInt64]; let currentIndex: Int }
@@ -126,20 +126,27 @@ func spaceInfo() -> SpaceInfo? {
 
 // MARK: - macOS version gate
 
+// Major version of the running OS — not the build SDK — or 0 if it can't be read.
+// Two gates key off this (the IOHID payload below and the yank guard); keep it one
+// read so they can't disagree.
+func macOSMajorVersion() -> Int {
+    var buf = [CChar](repeating: 0, count: 32)
+    var size = buf.count
+    guard sysctlbyname("kern.osproductversion", &buf, &size, nil, 0) == 0,
+          let major = Int(String(cString: buf).split(separator: ".").first ?? "") else {
+        return 0
+    }
+    return major
+}
+let macOSMajor = macOSMajorVersion()
+
 // macOS 27+ validates synthetic Dock swipes against a serialized IOHID payload.
-// The running OS — not the build SDK — decides, so check it at runtime.
 // NOSWOOSH_FORCE_AUGMENT=0/1 overrides for testing without a rebuild.
 func computeNeedsAugmentation() -> Bool {
     if let force = ProcessInfo.processInfo.environment["NOSWOOSH_FORCE_AUGMENT"] {
         return force == "1"
     }
-    var buf = [CChar](repeating: 0, count: 32)
-    var size = buf.count
-    guard sysctlbyname("kern.osproductversion", &buf, &size, nil, 0) == 0,
-          let major = Int(String(cString: buf).split(separator: ".").first ?? "") else {
-        return false
-    }
-    return major >= 27
+    return macOSMajor >= 27
 }
 let needsAugmentation = computeNeedsAugmentation()
 
@@ -358,6 +365,83 @@ func switchSpace(right: Bool) {
     predictionTime = Date()
 }
 
+// MARK: - Empty-desktop yank guard
+
+// Landing on a space with no ordinary windows makes macOS pick some other app
+// and activate it. If that app's window lives on a different space, ordering it
+// in trips the Dock's window-order follow rule and you are yanked away ~400ms
+// after landing — the Dock logs "switching to space N for window(...) ordered on
+// non-visible space". This is macOS behavior, not ours: plain native switching
+// does it too.
+//
+// The old fix was `workspaces-auto-swoosh -bool NO`, which stops the Dock from
+// registering for that notification at all. But disassembling the Dock shows the
+// rule's switcher has exactly ONE caller — that same notification block — so
+// killing it also kills Dock-icon-follow (clicking a Dock icon to jump to the
+// space its window is on). One pref, both behaviors; you cannot split them.
+//
+// So instead we let the Dock keep its rule and remove the *cause*: the moment we
+// land somewhere with nothing to focus, we take activation ourselves. macOS
+// still activates its pick (~at landing), but that app never gets to order its
+// off-space window in first, so the follow never fires. Measured margin is
+// ~380ms, which is why a plain notification observer is fast enough.
+//
+// Costs, both small: we are an .accessory app with no windows and no menu, so
+// the menu bar stays with whatever macOS picked and nothing is visible; only
+// keystrokes typed at an empty desktop go nowhere, which is where they were
+// already going. Requires .accessory (not .prohibited) — a prohibited app
+// cannot become active at all.
+//
+// Verified on macOS 26.6: 3/3 yanked without the guard, 0/3 with it. Two things
+// that do NOT work, so don't "simplify" to them: parking a real window on the
+// destination space (verified resident, still yanks — emptiness is the trigger,
+// not the cause), and activating BEFORE the switch (the switch re-activates
+// macOS's pick at landing and wipes it out). It has to be on landing.
+
+// Is any ordinary (layer 0) window resident on this space?
+func spaceHasWindows(_ spaceID: UInt64) -> Bool {
+    let list = CGWindowListCopyWindowInfo([.excludeDesktopElements],
+                                          kCGNullWindowID) as? [[String: Any]] ?? []
+    let ids = list.compactMap { w -> UInt32? in
+        guard (w[kCGWindowLayer as String] as? Int) == 0 else { return nil }
+        return w[kCGWindowNumber as String] as? UInt32
+    }
+    guard !ids.isEmpty else { return false }
+    let spaces = SLSCopySpacesForWindows(cid, 0x7, ids as CFArray)
+        .takeRetainedValue() as? [NSNumber] ?? []
+    return spaces.contains { $0.uint64Value == spaceID }
+}
+
+// macOS 27 fixed this at the source: it activates **Finder** on a windowless
+// landing. Finder owns the desktop and has no off-space window to order in, so the
+// chain never starts and nothing yanks — measured 4/4 rounds on 27.0 (26A5416b) with
+// a browser parked on another space, versus a reliable yank on 26.6. Running the
+// guard there would only displace Finder, and on an empty desktop a user expects
+// Finder active (desktop clicks, its menu bar, Cmd+N). So gate it off on 27+.
+//
+// An unreadable version (0) means run it: a needless activation on an unknown OS is
+// a far cheaper mistake than the yank coming back on one that needs the guard.
+// NOSWOOSH_FORCE_YANK_GUARD=0/1 overrides, for testing either side without a rebuild.
+let yankGuardNeeded: Bool = {
+    if let force = ProcessInfo.processInfo.environment["NOSWOOSH_FORCE_YANK_GUARD"] {
+        return force == "1"
+    }
+    return macOSMajor < 27
+}()
+
+// Daemon-only: a CLI switch exits within 150ms, so claiming activation there
+// would be pointless (and we would hand focus back on exit anyway).
+func installYankGuard() {
+    NSWorkspace.shared.notificationCenter.addObserver(
+        forName: NSWorkspace.activeSpaceDidChangeNotification,
+        object: nil, queue: .main
+    ) { _ in
+        if !spaceHasWindows(SLSGetActiveSpace(cid)) {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+}
+
 // A real horizontal swipe's direction comes from progress/velocity sign. macOS
 // 27 reversed it relative to the 26-era encoding (assumes a macOS 13+ SDK build).
 func isRightSwipe(_ direction: Double) -> Bool {
@@ -381,21 +465,26 @@ if args.count > 1 {
         exit(0)
     case "setup":
         setCtrlArrowShortcuts(enabled: false)
-        _ = runTool("/usr/bin/defaults", ["write", "com.apple.dock", "workspaces-auto-swoosh", "-bool", "NO"])
-        _ = runTool("/usr/bin/killall", ["Dock"])
+        // Versions 1.6.4 and earlier disabled the Dock's window-order space-follow
+        // (workspaces-auto-swoosh) to suppress the empty-desktop yank. That also
+        // killed Dock-icon-follow, because the Dock runs both off the same
+        // notification. The daemon's yank guard handles the yank directly now, so
+        // leave the pref at the macOS default. Clear an override a prior version
+        // left — restarting the Dock only if we actually removed one, so a fresh
+        // install gets no gratuitous restart.
+        if runTool("/usr/bin/defaults", ["delete", "com.apple.dock", "workspaces-auto-swoosh"]) {
+            _ = runTool("/usr/bin/killall", ["Dock"])
+        }
         print("""
         noswoosh setup complete:
           - system animated Ctrl+arrow shortcuts disabled (live + persisted)
-          - Dock window-order space-follow disabled (empty-desktop yank fix; Dock restarted)
         Remaining: start the daemon (brew services start noswoosh, or the
         LaunchAgent from install.sh) and grant it Accessibility permission.
         """)
         exit(0)
     case "teardown":
         setCtrlArrowShortcuts(enabled: true)
-        _ = runTool("/usr/bin/defaults", ["delete", "com.apple.dock", "workspaces-auto-swoosh"])
-        _ = runTool("/usr/bin/killall", ["Dock"])
-        print("noswoosh teardown complete: system Ctrl+arrow shortcuts re-enabled, Dock space-follow restored.")
+        print("noswoosh teardown complete: system Ctrl+arrow shortcuts re-enabled.")
         exit(0)
     case "version", "--version":
         print("noswoosh \(noswooshVersion)")
@@ -448,7 +537,16 @@ if !AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary) {
 }
 
 let app = NSApplication.shared
-app.setActivationPolicy(.prohibited)
+// .accessory, not .prohibited: no Dock icon and no Cmd-Tab entry either way, but
+// a prohibited app cannot become active, which the yank guard depends on.
+app.setActivationPolicy(.accessory)
+if yankGuardNeeded {
+    installYankGuard()
+} else if ProcessInfo.processInfo.environment["NOSWOOSH_FORCE_YANK_GUARD"] != nil {
+    log("empty-desktop yank guard off (forced by NOSWOOSH_FORCE_YANK_GUARD)")
+} else {
+    log("empty-desktop yank guard off (macOS \(macOSMajor) handles it natively)")
+}
 
 // Input source 1: Ctrl+Left / Ctrl+Right hotkey.
 var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),

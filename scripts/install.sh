@@ -29,9 +29,16 @@ fi
 
 echo "==> Installing to $BIN_DIR"
 mkdir -p "$BIN_DIR"
+# Stop the daemon and unlink the old binary first. `cp` rewrites the destination
+# inode in place; doing that to a *running* signed binary leaves the kernel holding
+# page hashes that no longer match, and it then SIGKILLs every later exec of that
+# inode — including fresh ones. The file verifies fine with `codesign -v`, which
+# makes it a memorable afternoon. A fresh inode avoids it entirely.
+launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+rm -f "$BIN_DIR/noswoosh"
 cp noswoosh noswoosh.swift "$BIN_DIR/"
 
-echo "==> Configuring system (shortcuts + empty-desktop yank fix; restarts the Dock)"
+echo "==> Configuring system (disables the animated Ctrl+arrow shortcuts)"
 "$BIN_DIR/noswoosh" setup
 
 echo "==> Installing LaunchAgent $LABEL"

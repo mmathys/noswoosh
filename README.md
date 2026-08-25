@@ -108,28 +108,42 @@ uses the original lightweight path unchanged.
 
 While building this we found a macOS behavior reproducible with plain native
 switching: **switch to a desktop with no windows, and ~400 ms later macOS yanks you to
-a different desktop.** The chain of events, visible in the Dock's log:
+a different desktop.** The chain, confirmed in the Dock's log and by instrumenting
+app activations:
 
-1. Landing on a windowless space, WindowServer re-promotes the last-active app to
-   front process.
-2. That app (AppKit) re-orders its key window — which lives on another space.
-3. The Dock's window-order follow rule fires (`switching to space N for window ordered
-   on non-visible space`) and you're yanked to wherever that window lives.
+1. Landing on a space with no windows, macOS picks some other app and activates it.
+2. That app orders its key window in — and that window lives on another space.
+3. The Dock's window-order follow rule fires (`switching to space N for window(...)
+   ordered on non-visible space`) and you're yanked to wherever that window lives.
 
-Disassembling the Dock shows this follow rule is a **separate code path** from the
-"switch to a Space with open windows when switching to an application" setting
-(`AppleSpacesSwitchOnActivate` — disabling that does *not* help). The Dock registers
-for the underlying WindowServer notification at startup only when the legacy pref
-`workspaces-auto-swoosh` is true, which is the default. Hence the fix, fittingly a
-sibling of the extinct key this tool is named after:
+The tempting fix is `defaults write com.apple.dock workspaces-auto-swoosh -bool NO`,
+which stops the Dock registering for that notification at all. noswoosh shipped that
+through 1.6.4 — and it costs you **Dock-icon-follow**, clicking a Dock icon to jump to
+the space its window is already on. Disassembling the Dock shows why the two can't be
+split: the rule's switcher has exactly *one* caller, that same notification block. One
+pref, both behaviors. (It's also a separate code path from the "switch to a Space with
+open windows when switching to an application" setting, `AppleSpacesSwitchOnActivate`
+— toggling that does *not* help.)
 
-```sh
-defaults write com.apple.dock workspaces-auto-swoosh -bool NO
-killall Dock
-```
+So since 1.7.0 noswoosh leaves the pref alone and removes the **cause** instead: the
+moment the daemon lands on a space with nothing to focus, it takes activation itself.
+macOS still activates its pick, but that app never gets to order its off-space window
+in first, so the follow never fires — measured margin is ~380 ms. Dock-icon-follow
+keeps working, natively, with all of the Dock's own semantics intact.
 
-`noswoosh setup` applies this. Side effect, arguably a feature: a window opening on
-another space no longer auto-drags you to it.
+The daemon has no windows and no menu, so the menu bar stays with whatever macOS
+picked and nothing is visible. The only trace is that keystrokes typed at an empty
+desktop go nowhere — which is where they were already going.
+
+**macOS 27 doesn't need this, and doesn't get it.** 27 activates Finder on a windowless
+landing; Finder owns the desktop and has no off-space window to order in, so the chain
+never starts. The guard is gated off on 27+ — running it there would only displace
+Finder, and on an empty desktop that's the app you want active.
+
+Two variants that seem like they should work and don't, recorded so nobody re-tries
+them: parking a real window on the destination space (verified resident — it still
+yanks, so emptiness is the trigger, not the cause), and taking activation *before* the
+switch (the switch re-activates macOS's pick on landing and wipes it out).
 
 ## Troubleshooting
 
@@ -177,8 +191,8 @@ based on most recent use" in System Settings → Desktop & Dock.
 brew uninstall --cask noswoosh     # or: ./scripts/uninstall.sh, from source
 ```
 
-This stops the daemon, removes the LaunchAgent, and restores both system settings that
-`setup` changed. Remove the Accessibility entry manually if you like.
+This stops the daemon, removes the LaunchAgent, and restores the system Ctrl+arrow
+shortcuts that `setup` disabled. Remove the Accessibility entry manually if you like.
 
 ## Contributing
 
