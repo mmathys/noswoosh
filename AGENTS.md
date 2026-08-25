@@ -34,7 +34,13 @@ cask bump in `mmathys/homebrew-tap` — never clone or push that repo by hand.
 
 **Don't tidy the private-API constants.** The numeric `CGEventField`s and the `1e-4`
 gesture progress are load-bearing and hard-won. `FLT_TRUE_MIN` — what the reference
-implementations use — is flushed to zero on Apple Silicon and breaks direction.
+implementations use — is flushed to zero on Apple Silicon and breaks direction. Both
+paths use `1e-4` as of 1.7.1: the 27 path shipped `±1.0` (full travel) through 1.7.0,
+which switched correctly and so passed every functional test, but *visibly slid* —
+instant switching is the whole point, and no assertion in this repo catches a switch
+that works but animates. The ±9999 fling on `.ended` is what commits the 27 swipe, so
+only the sign of progress matters; don't use `0`, which `fixed1616` serializes as 0 in
+the IOHID payload. Verify by eye on a real 27, not just by checking that it switched.
 
 **The macOS 27 IOHID payload is byte-exact.** `generateIOHIDPayload` writes packed
 little-endian structs (28/40/28-byte records) whose sizes and field offsets the Dock

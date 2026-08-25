@@ -180,10 +180,12 @@ based on most recent use" in System Settings → Desktop & Dock.
   symptom is switches silently stopping; the fix is adapting the gesture payload (as the
   26 → 27 change already required). noswoosh gates each path behind a runtime OS check so
   a future break can be isolated to one path.
-- **Apple Silicon quirk (macOS 26 path).** The reference implementations use
-  `FLT_TRUE_MIN` as the gesture progress; that subnormal float is flushed to zero (sign
-  lost) somewhere in the event pipeline on Apple Silicon, making every switch go the
-  same direction. This port uses `1e-4`, which survives and is still visually zero.
+- **Apple Silicon quirk.** The reference implementations use `FLT_TRUE_MIN` as the
+  gesture progress; that subnormal float is flushed to zero (sign lost) somewhere in the
+  event pipeline on Apple Silicon, making every switch go the same direction. This port
+  uses `1e-4`, which survives and is still visually zero. Both OS paths use it — the
+  macOS 27 path used full travel (`±1.0`) through 1.7.0, which switched correctly but
+  visibly slid; 1.7.1 made it near-zero there too.
 
 ## Uninstall
 

@@ -45,7 +45,7 @@ import ApplicationServices
 // Build: swiftc noswoosh.swift -O -o noswoosh \
 //          -F /System/Library/PrivateFrameworks -framework SkyLight
 
-let noswooshVersion = "1.7.0"
+let noswooshVersion = "1.7.1"
 
 // MARK: - Setup / teardown (system configuration, all user-level)
 
@@ -296,8 +296,15 @@ func makeAugmentedDockEvent(_ phase: GesturePhase, right: Bool) -> CGEvent? {
     ev.setIntegerValueField(fieldCGSEventType, value: kCGSEventDockControl)
     ev.setIntegerValueField(fieldGestureHIDType, value: kIOHIDEventTypeDockSwipe)
     ev.setIntegerValueField(fieldGesturePhase, value: phase.rawValue)
+    // Near-zero progress, same as the pre-27 path and for the same reason: it
+    // commits the switch with nothing left to animate. This path used full travel
+    // (±1.0) through 1.7.0, which visibly slid on 27 — the switch was correct but
+    // not instant, defeating the point. The ±9999 fling on .ended is what commits
+    // it, so the magnitude here can be ~0 without losing the switch; only the sign
+    // matters. Not FLT_TRUE_MIN (flushes to zero on Apple Silicon, losing the sign)
+    // and not 0 either — `fixed1616` would serialize it as 0 in the IOHID payload.
     // On the 27 path direction is inverted: rightward = negative progress.
-    ev.setDoubleValueField(fieldSwipeProgress, value: right ? -1.0 : 1.0)
+    ev.setDoubleValueField(fieldSwipeProgress, value: right ? -1e-4 : 1e-4)
     ev.setIntegerValueField(fieldSwipeMotion, value: kCGGestureMotionHorizontal)
     ev.setDoubleValueField(fieldSwipePositionX, value: 0.1)
     // A strong "fling" velocity on the terminal phase is what commits the switch.
