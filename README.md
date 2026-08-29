@@ -58,6 +58,10 @@ Two ways to switch, both instant:
 
 Movement is clamped at the first and last space, so there's no rubber-band bounce.
 
+Multi-display works exactly as it does without noswoosh: the switch applies to the
+display under the pointer, not the one holding keyboard focus. With "Displays have
+separate Spaces" off, all displays share one set and move together.
+
 A CLI is available for scripting and debugging:
 
 ```sh
