@@ -73,6 +73,13 @@ noswoosh teardown
 noswoosh version
 ```
 
+For a custom shortcut, bind `noswoosh left` / `noswoosh right` in any hotkey tool that
+runs a command — [skhd](https://github.com/koekeishiya/skhd),
+[Karabiner-Elements](https://karabiner-elements.pqrs.org),
+[Hammerspoon](https://www.hammerspoon.org) or [Raycast](https://www.raycast.com). The
+switch lands in ~100ms either way, so there's no speed penalty versus the built-in
+Ctrl+←/→.
+
 ## How it works
 
 macOS has no supported way to disable *only* the space-switch slide animation:
