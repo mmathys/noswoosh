@@ -45,7 +45,7 @@ import ApplicationServices
 // Build: swiftc noswoosh.swift -O -o noswoosh \
 //          -F /System/Library/PrivateFrameworks -framework SkyLight
 
-let noswooshVersion = "1.7.1"
+let noswooshVersion = "1.7.2"
 
 // MARK: - Setup / teardown (system configuration, all user-level)
 
@@ -103,23 +103,65 @@ func SLSCopySpacesForWindows(_ cid: CGSConnectionID, _ mask: Int32,
 
 let cid = SLSMainConnectionID()
 
-struct SpaceInfo { let ids: [UInt64]; let currentIndex: Int }
+struct SpaceInfo {
+    let ids: [UInt64]
+    let currentIndex: Int
+    // "Display Identifier" of the display this list belongs to, so a prediction
+    // made on one display is never applied to another's list.
+    let display: String?
+}
 
-// Space list for the display that owns the currently active space, plus the
-// active space's index in it. Keying off the global active space (not
-// displays.first) keeps boundary math correct on multi-display setups, where the
-// switch lands on whichever display has focus. On a single display this is
-// exactly the first display. The list includes fullscreen spaces, which the
+// UUID string of the display under the mouse cursor, in the same form as the
+// "Display Identifier" values in SLSCopyManagedDisplaySpaces. A CGEvent's
+// location is already in global CG coordinates, so this needs no flip from
+// Cocoa's bottom-left origin.
+func cursorDisplayUUID() -> String? {
+    guard let location = CGEvent(source: nil)?.location else { return nil }
+    var displayID = CGDirectDisplayID()
+    var matched: UInt32 = 0
+    guard CGGetDisplaysWithPoint(location, 1, &displayID, &matched) == .success,
+          matched > 0,
+          let uuid = CGDisplayCreateUUIDFromDisplayID(displayID)?.takeRetainedValue()
+    else { return nil }
+    return CFUUIDCreateString(nil, uuid) as String
+}
+
+// Space list for the display the switch will actually land on, plus that
+// display's current index in it. The list includes fullscreen spaces, which the
 // swipe traverses too.
+//
+// The Dock routes a Dock-swipe to the display under the *mouse cursor*, not the
+// one holding keyboard focus — native Ctrl+arrow routes the same way, so merely
+// hovering a display makes it the target. SLSGetActiveSpace tracks keyboard
+// focus instead, so clamping against it guards the wrong list whenever cursor
+// and focus sit on different displays: it either deadens a legal keypress or
+// lets through a swipe that rubber-bands. See issue #3.
 func spaceInfo() -> SpaceInfo? {
     let displays = SLSCopyManagedDisplaySpaces(cid).takeRetainedValue() as! [[String: Any]]
+
+    func info(_ display: [String: Any], current: UInt64) -> SpaceInfo? {
+        guard let spaces = display["Spaces"] as? [[String: Any]] else { return nil }
+        let ids = spaces.compactMap { ($0["id64"] as? NSNumber)?.uint64Value }
+        guard let idx = ids.firstIndex(of: current) else { return nil }
+        return SpaceInfo(ids: ids, currentIndex: idx,
+                         display: display["Display Identifier"] as? String)
+    }
+
+    // Multi-display: ask the cursor's display for its own current space. Each
+    // display dict already carries one, so this costs no extra private call.
+    if displays.count > 1, let uuid = cursorDisplayUUID(),
+       let display = displays.first(where: { ($0["Display Identifier"] as? String) == uuid }),
+       let current = (display["Current Space"] as? [String: Any])?["id64"] as? NSNumber,
+       let result = info(display, current: current.uint64Value) {
+        return result
+    }
+
+    // One managed display — a single screen, or "Displays have separate Spaces"
+    // off, where every screen shares one list — plus the fallback for a failed
+    // cursor lookup. Byte-identical to the behavior before the fix.
     let active = SLSGetActiveSpace(cid)
     for display in displays {
-        guard let spaces = display["Spaces"] as? [[String: Any]] else { continue }
-        let ids = spaces.compactMap { ($0["id64"] as? NSNumber)?.uint64Value }
-        if let idx = ids.firstIndex(of: active) {
-            return SpaceInfo(ids: ids, currentIndex: idx)
-        }
+        if let result = info(display, current: active) { return result }
     }
     return nil
 }
@@ -329,6 +371,7 @@ func postPair(_ dock: CGEvent) {
 // stale. Trust our own prediction for a short window after a switch. macOS 27's
 // list settles slower after a synthetic switch, so give it a wider window.
 var predictedIndex: Int?
+var predictedDisplay: String?
 var predictionTime = Date.distantPast
 let predictionWindow = needsAugmentation ? 0.4 : 0.25
 
@@ -360,7 +403,9 @@ func switchSpace(right: Bool) {
     var current = info.currentIndex
     // Prefer our prediction while the list may still be catching up, so a rapid
     // second switch is not blocked by a stale "you're at the edge" reading.
-    if let p = predictedIndex, Date().timeIntervalSince(predictionTime) < predictionWindow {
+    // Only on the display it was made for; the cursor may have moved since.
+    if let p = predictedIndex, predictedDisplay == info.display,
+       Date().timeIntervalSince(predictionTime) < predictionWindow {
         current = p
     }
     let target = current + (right ? 1 : -1)
@@ -369,6 +414,7 @@ func switchSpace(right: Bool) {
     guard target >= 0, target < info.ids.count else { return }
     postSwitchGesture(right: right)
     predictedIndex = target
+    predictedDisplay = info.display
     predictionTime = Date()
 }
 
