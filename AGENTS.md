@@ -96,6 +96,18 @@ scratch build rather than trusting a green run.
 **`setup`/`teardown` change system settings and restart the Dock.** If you toggle them
 while testing, restore the user's original state before you finish.
 
+**Space switching follows the cursor, not keyboard focus.** The Dock routes a Dock-swipe
+to the display under the mouse pointer, and native Ctrl+arrow routes the same way —
+hovering a second display, with no click and no focus change, makes it the target.
+`SLSGetActiveSpace` and `SLSCopyActiveMenuBarDisplayIdentifier` track keyboard focus
+instead, so they are the wrong input for anything that must agree with where a swipe will
+land; using them for the boundary clamp was issue #3. The swipe cannot be *steered*
+either: the 27 path carries `fieldSwipePositionX/Y`, but the pre-27 path has no position
+field, so only the clamp can be made to follow. When testing multi-display, pin the cursor
+explicitly with `CGWarpMouseCursorPosition` — otherwise results depend on wherever you
+happened to leave it. Only relevant with "Displays have separate Spaces" on; with it off
+every screen shares one space list.
+
 **Nothing secret belongs in this repo.** Signing material lives in
 `~/.config/noswoosh-signing/` and in CI secrets. The `.p12` must be exported with
 legacy PBE flags (`-keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1`) or
