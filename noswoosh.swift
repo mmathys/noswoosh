@@ -192,6 +192,27 @@ func computeNeedsAugmentation() -> Bool {
 }
 let needsAugmentation = computeNeedsAugmentation()
 
+// The macOS 27 posting sign is relative to "Natural scrolling" being ON
+// (`com.apple.swipescrolldirection`, the default): with it OFF the Dock reads a
+// posted swipe the other way round, so every switch goes backwards. Measured on a
+// MacBook Air (M4) running 27.0 (26A428), toggling only this setting between runs:
+//
+//   natural ON   posting +1e-4 / +9999 -> one space LEFT,  -1e-4 / -9999 -> RIGHT
+//   natural OFF  posting +1e-4 / +9999 -> one space RIGHT, -1e-4 / -9999 -> LEFT
+//
+// Only the posted sign moves. The reading side is right either way: with the setting
+// off a rightward 3-finger swipe reports positive progress and natively lands one
+// space right, with it on it reports negative and lands one space left — `isRightSwipe`
+// maps both correctly, so it is deliberately left alone (see its comment).
+//
+// Gated to the 27 path: the pre-27 path is untested with the setting off.
+let postedSwipeSign: Double = {
+    guard needsAugmentation else { return 1 }
+    let naturalScrolling = CFPreferencesCopyAppValue(
+        "com.apple.swipescrolldirection" as CFString, kCFPreferencesAnyApplication) as? Bool ?? true
+    return naturalScrolling ? 1 : -1
+}()
+
 // MARK: - Synthetic Dock-swipe gesture (undocumented CGEventFields)
 
 func field(_ n: UInt32) -> CGEventField { unsafeBitCast(n, to: CGEventField.self) }
@@ -344,12 +365,12 @@ func makeAugmentedDockEvent(_ phase: GesturePhase, right: Bool) -> CGEvent? {
     // matters. Not FLT_TRUE_MIN (flushes to zero on Apple Silicon, losing the sign)
     // and not 0 either — `fixed1616` would serialize it as 0 in the IOHID payload.
     // On the 27 path direction is inverted: rightward = negative progress.
-    ev.setDoubleValueField(fieldSwipeProgress, value: right ? -1e-4 : 1e-4)
+    ev.setDoubleValueField(fieldSwipeProgress, value: (right ? -1e-4 : 1e-4) * postedSwipeSign)
     ev.setIntegerValueField(fieldSwipeMotion, value: kCGGestureMotionHorizontal)
     ev.setDoubleValueField(fieldSwipePositionX, value: 0.1)
     // A strong "fling" velocity on the terminal phase is what commits the switch.
     if phase == .ended {
-        ev.setDoubleValueField(fieldSwipeVelocityX, value: right ? -9999.0 : 9999.0)
+        ev.setDoubleValueField(fieldSwipeVelocityX, value: (right ? -9999.0 : 9999.0) * postedSwipeSign)
     }
     return ev
 }
@@ -514,6 +535,12 @@ func installYankGuard() {
 // Flipping the reading side too (1.7.2 and earlier) inverts every trackpad swipe,
 // while Ctrl+arrow keeps working because it never reads a real gesture. Don't
 // re-add it.
+//
+// "Natural scrolling" mirrors the gesture itself, not this mapping: the same
+// rightward 3-finger swipe reports +1.20 / +2.5 and lands one space right with the
+// setting off, and -0.88 / -7.8 and lands one space left with it on (measured on
+// 27.0, 26A428, passive tap). Both read correctly here, so `postedSwipeSign`
+// corrects only the posting side.
 func isRightSwipe(_ direction: Double) -> Bool {
     direction > 0
 }
