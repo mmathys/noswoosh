@@ -45,7 +45,7 @@ import ApplicationServices
 // Build: swiftc noswoosh.swift -O -o noswoosh \
 //          -F /System/Library/PrivateFrameworks -framework SkyLight
 
-let noswooshVersion = "1.7.4"
+let noswooshVersion = "1.7.5"
 
 // MARK: - Setup / teardown (system configuration, all user-level)
 
