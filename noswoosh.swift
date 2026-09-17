@@ -615,6 +615,51 @@ func log(_ message: String) {
 // the LaunchAgent sets KeepAlive, so launchd immediately starts a fresh process
 // that picks the grant up. Run outside launchd there is nothing to restart us,
 // so say so instead.
+// MARK: - Menu bar item
+
+// A status item gives the daemon somewhere to live that the user can see and
+// quit from. Its image is a *template* — black pixels plus alpha — so macOS
+// tints it for light and dark menu bars and inverts it while the menu is open.
+// Shipped at 1x and 2x so the bar never resamples it.
+var statusItem: NSStatusItem?
+
+func menuBarImage() -> NSImage? {
+    guard let dir = Bundle.main.resourcePath else { return nil }
+    let image = NSImage(size: NSSize(width: 16, height: 18))
+    for (file, scale) in [("menubar-icon.png", CGFloat(1)), ("menubar-icon@2x.png", CGFloat(2))] {
+        guard let rep = NSImageRep(contentsOfFile: "\(dir)/\(file)") else { continue }
+        // Point size, not pixel size: the 2x rep must claim the same 16x18 points.
+        rep.size = NSSize(width: CGFloat(rep.pixelsWide) / scale,
+                          height: CGFloat(rep.pixelsHigh) / scale)
+        image.addRepresentation(rep)
+    }
+    guard !image.representations.isEmpty else { return nil }
+    image.isTemplate = true
+    return image
+}
+
+func installStatusItem() {
+    let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    guard let button = item.button else { return }
+    if let image = menuBarImage() {
+        button.image = image
+    } else {
+        button.title = "👽"   // bundle resources missing; still give the user a handle
+    }
+    button.toolTip = "noswoosh \(noswooshVersion)"
+    let menu = NSMenu()
+    let header = NSMenuItem(title: "noswoosh \(noswooshVersion)", action: nil, keyEquivalent: "")
+    header.isEnabled = false
+    menu.addItem(header)
+    menu.addItem(.separator())
+    // No key equivalent: the menu is only reachable by clicking the status item,
+    // and a stray Cmd+Q here would shadow the frontmost app's own Quit.
+    menu.addItem(NSMenuItem(title: "Quit",
+                            action: #selector(NSApplication.terminate(_:)), keyEquivalent: ""))
+    item.menu = menu
+    statusItem = item
+}
+
 let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
 if !AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary) {
     log("waiting for Accessibility permission (System Settings > Privacy & Security > Accessibility)")
@@ -648,6 +693,7 @@ let app = NSApplication.shared
 // .accessory, not .prohibited: no Dock icon and no Cmd-Tab entry either way, but
 // a prohibited app cannot become active, which the yank guard depends on.
 app.setActivationPolicy(.accessory)
+installStatusItem()
 if yankGuardNeeded {
     installYankGuard()
 } else {

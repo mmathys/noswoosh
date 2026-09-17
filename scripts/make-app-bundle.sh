@@ -53,6 +53,14 @@ if [ -f assets/icon-rounded.png ]; then
     rm -rf "$(dirname "$ICONSET")"
 fi
 
+# Menu bar glyph. A template image: black pixels plus alpha, which macOS tints
+# for light/dark menu bars and for the highlighted state. Shipped at 1x and 2x
+# rather than as one big image, so it is never resampled at display size.
+for scale in "" "@2x"; do
+    src="assets/menubar-icon${scale}.png"
+    [ -f "$src" ] && cp "$src" "$APP/Contents/Resources/menubar-icon${scale}.png"
+done
+
 if [ -n "$BUILD_TMP" ]; then rm -rf "$BUILD_TMP"; fi
 
 if [ -n "$IDENTITY" ]; then
