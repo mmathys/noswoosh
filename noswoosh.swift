@@ -638,6 +638,15 @@ func menuBarImage() -> NSImage? {
     return image
 }
 
+// TODO(#13): upgrade path from the LaunchAgent era. Anyone installed before this
+// has ~/Library/LaunchAgents/ax.max.noswoosh.plist written by the cask's postflight,
+// pointing at the app bundle. Once setup moves in here and registers with
+// SMAppService, first launch must boot that job out and delete the plist — otherwise
+// launchd and SMAppService each start a copy, two daemons race the same hotkeys and
+// event tap, and `teardown` only knows about one of them. Must also survive the
+// reverse order (new version installed, old plist arriving later from a stale
+// `brew reinstall`), and must be idempotent: it runs on every launch, not just the
+// first after upgrading.
 func installStatusItem() {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     guard let button = item.button else { return }
