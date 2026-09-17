@@ -4,12 +4,14 @@ import ApplicationServices
 
 // noswoosh — instant macOS space switching (verified on macOS 26 and 27, Apple Silicon).
 //
-//   noswoosh            daemon: Ctrl+Left/Right OR a 3-finger swipe switch
-//                       spaces instantly (no animation)
+//   noswoosh            daemon: Ctrl+Left/Right (one space), Option+1…0
+//                       (jump straight to Desktop 1…10) OR a 3-finger swipe
+//                       switch spaces instantly (no animation)
 //   noswoosh setup      one-time system config (see below), needs no sudo
 //   noswoosh teardown   undo the system config
 //   noswoosh left       switch one space left and exit
 //   noswoosh right      switch one space right and exit
+//   noswoosh goto N     jump straight to Desktop N and exit
 //   noswoosh list       print current space / count
 //   noswoosh version    print version
 //
@@ -34,13 +36,14 @@ import ApplicationServices
 // reverse-engineered from joshuarli/iss (ISC). Everything 27-specific is gated
 // behind `needsAugmentation`, so the verified macOS 26 path is untouched.
 //
-// `noswoosh setup` configures one thing: the system's animated Ctrl+arrow
-// shortcuts (symbolic hotkeys 79/81) must be disabled or they consume the key
-// combo first. Setup disables them live via SkyLight (defaults alone doesn't
-// affect the running session) AND persists them in com.apple.symbolichotkeys
-// for future logins. (For migration it also clears the legacy
-// com.apple.dock workspaces-auto-swoosh override older versions set — see the
-// yank guard below and the setup case for why we no longer touch it.)
+// `noswoosh setup` disables the animated system space shortcuts — Ctrl+arrow
+// (symbolic hotkeys 79/81) and "Switch to Desktop 1…10" (118…127) — because
+// each consumes its key combo before the daemon's own hotkey sees it. Setup
+// disables them live via SkyLight (defaults alone doesn't affect the running
+// session) AND persists them in com.apple.symbolichotkeys for future logins.
+// (For migration it also clears the legacy com.apple.dock
+// workspaces-auto-swoosh override older versions set — see the yank guard
+// below and the setup case for why we no longer touch it.)
 //
 // Build: swiftc noswoosh.swift -O -o noswoosh \
 //          -F /System/Library/PrivateFrameworks -framework SkyLight
@@ -62,24 +65,90 @@ func runTool(_ path: String, _ arguments: [String]) -> Bool {
     }
 }
 
-// hotkey 79 = "move left a space" (ctrl+left, key code 123),
-// hotkey 81 = "move right a space" (ctrl+right, key code 124)
-func setCtrlArrowShortcuts(enabled: Bool) {
-    // Live (WindowServer) state — resolved via dlsym; writing defaults alone
-    // does not affect the running login session.
-    typealias SetHotKeyFn = @convention(c) (Int32, Bool) -> Int32
-    if let skylight = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY),
-       let sym = dlsym(skylight, "SLSSetSymbolicHotKeyEnabled") {
-        let setEnabled = unsafeBitCast(sym, to: SetHotKeyFn.self)
-        _ = setEnabled(79, enabled)
-        _ = setEnabled(81, enabled)
+// Same, capturing stdout. Read to EOF before waiting so a full pipe can't
+// deadlock the child.
+func runToolOutput(_ path: String, _ arguments: [String]) -> Data? {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: path)
+    process.arguments = arguments
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    do {
+        try process.run()
+    } catch {
+        return nil
     }
-    // Persisted state for future logins.
-    for (hotKey, keyCode) in [(79, 123), (81, 124)] {
-        let entry = "{enabled = \(enabled ? 1 : 0); value = { parameters = (65535, \(keyCode), 8650752); type = standard; };}"
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    return process.terminationStatus == 0 ? data : nil
+}
+
+// Flip one symbolic hotkey's live (WindowServer) state. Resolved via dlsym:
+// writing defaults alone does not affect the running login session.
+func setSymbolicHotKey(_ id: Int32, enabled: Bool) {
+    typealias SetHotKeyFn = @convention(c) (Int32, Bool) -> Int32
+    guard let skylight = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY),
+          let sym = dlsym(skylight, "SLSSetSymbolicHotKeyEnabled") else { return }
+    let setEnabled = unsafeBitCast(sym, to: SetHotKeyFn.self)
+    _ = setEnabled(id, enabled)
+}
+
+// Symbolic hotkeys for the animated system space shortcuts that `setup`
+// disables so the daemon's own hotkeys hear the combos first: 79/81 are
+// "move left/right a space" (Ctrl+arrow, key codes 123/124), and 118…127 are
+// "Switch to Desktop 1"…"Switch to Desktop 10".
+let ctrlArrowSymbolicHotKeys = [79, 81]
+let desktopSymbolicHotKeys = Array(118...127)
+
+// The AppleSymbolicHotKeys dictionary, read through cfprefsd.
+func systemSymbolicHotKeys() -> [String: Any]? {
+    guard let data = runToolOutput("/usr/bin/defaults", ["export", "com.apple.symbolichotkeys", "-"]),
+          let root = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any],
+          let hotkeys = root["AppleSymbolicHotKeys"] as? [String: Any] else { return nil }
+    return hotkeys
+}
+
+// Persist one `enabled` flag per key with `-dict-add`, going through cfprefsd the
+// same way the system's own writes do. Each entry's `value` (the key binding) is
+// copied across, so a rebinding — Opt+1…0 is itself a customization of the
+// Ctrl+1…0 default — survives the cycle. 79/81 get their documented default if a
+// fresh system somehow lacks the entry.
+func persistSystemSpaceShortcuts(ids: [Int], enabled: Bool) {
+    guard let hotkeys = systemSymbolicHotKeys() else { return }
+    for id in ids {
+        let key = String(id)
+        var parameters: [Int]?
+        if let value = hotkeys[key] as? [String: Any], let p = value["parameters"] as? [NSNumber] {
+            parameters = p.map { $0.intValue }
+        } else if let keyCode = [79: 123, 81: 124][id] {
+            parameters = [65535, keyCode, 8650752]
+        }
+        guard let p = parameters, p.count == 3 else { continue }
+        let entry = "{enabled = \(enabled ? 1 : 0); value = { parameters = (\(p[0]), \(p[1]), \(p[2])); type = standard; };}"
         _ = runTool("/usr/bin/defaults", ["write", "com.apple.symbolichotkeys",
-                                          "AppleSymbolicHotKeys", "-dict-add",
-                                          String(hotKey), entry])
+                                          "AppleSymbolicHotKeys", "-dict-add", key, entry])
+    }
+}
+
+func systemSpaceShortcutsMatch(ids: [Int], enabled: Bool) -> Bool {
+    guard let hotkeys = systemSymbolicHotKeys() else { return false }
+    return ids.allSatisfy { id in
+        guard let entry = hotkeys[String(id)] as? [String: Any] else { return false }
+        return ((entry["enabled"] as? NSNumber)?.boolValue ?? false) == enabled
+    }
+}
+
+func setSystemSpaceShortcuts(enabled: Bool) {
+    let ids = ctrlArrowSymbolicHotKeys + desktopSymbolicHotKeys
+    // Changing a hotkey live makes the system persist it itself, asynchronously,
+    // and that write can land after ours and revert a single key (measured ~1 in
+    // 6 even writing each key through cfprefsd). So re-issue both and verify the
+    // readback, retrying until it sticks — in practice one or two passes.
+    for _ in 0..<5 {
+        for id in ids { setSymbolicHotKey(Int32(id), enabled: enabled) }
+        persistSystemSpaceShortcuts(ids: ids, enabled: enabled)
+        if systemSpaceShortcutsMatch(ids: ids, enabled: enabled) { return }
+        Thread.sleep(forTimeInterval: 0.2)
     }
 }
 
@@ -101,11 +170,24 @@ func SLSGetActiveSpace(_ cid: CGSConnectionID) -> UInt64
 func SLSCopySpacesForWindows(_ cid: CGSConnectionID, _ mask: Int32,
                              _ windows: CFArray) -> Unmanaged<CFArray>
 
+// Jump a display straight to a space by id. This is the one place noswoosh does
+// not go through the Dock: a Dock gesture moves exactly one space, so an absolute
+// jump would be a run of them — slow to cross and easy to overrun. Issue #1
+// records this route failing on macOS 26.0–26.5, but it switches instantly and
+// cleanly on 27; verify on 26.6+ before assuming otherwise.
+@_silgen_name("SLSManagedDisplaySetCurrentSpace")
+func SLSManagedDisplaySetCurrentSpace(_ cid: CGSConnectionID, _ display: CFString,
+                                      _ space: UInt64) -> Int32
+
 let cid = SLSMainConnectionID()
 
 struct SpaceInfo {
     let ids: [UInt64]
     let currentIndex: Int
+    // Indices into `ids` of the ordinary desktops (type 0), skipping fullscreen
+    // spaces (type 4). Relative switching traverses every space, but the system's
+    // "Desktop N" numbering counts only desktops, so absolute jumps use this.
+    let desktopIndices: [Int]
     // "Display Identifier" of the display this list belongs to, so a prediction
     // made on one display is never applied to another's list.
     let display: String?
@@ -141,9 +223,18 @@ func spaceInfo() -> SpaceInfo? {
 
     func info(_ display: [String: Any], current: UInt64) -> SpaceInfo? {
         guard let spaces = display["Spaces"] as? [[String: Any]] else { return nil }
-        let ids = spaces.compactMap { ($0["id64"] as? NSNumber)?.uint64Value }
+        var ids: [UInt64] = []
+        var desktopIndices: [Int] = []
+        for space in spaces {
+            guard let id = (space["id64"] as? NSNumber)?.uint64Value else { continue }
+            if (space["type"] as? NSNumber)?.intValue == 0 { desktopIndices.append(ids.count) }
+            ids.append(id)
+        }
         guard let idx = ids.firstIndex(of: current) else { return nil }
-        return SpaceInfo(ids: ids, currentIndex: idx,
+        // If `type` ever goes missing, fall back to treating every space as a
+        // desktop rather than deadening the Option+number hotkeys.
+        if desktopIndices.isEmpty { desktopIndices = Array(ids.indices) }
+        return SpaceInfo(ids: ids, currentIndex: idx, desktopIndices: desktopIndices,
                          display: display["Display Identifier"] as? String)
     }
 
@@ -422,6 +513,27 @@ func switchSpace(right: Bool) {
     predictionTime = Date()
 }
 
+// Absolute jump to Desktop N (1-based): the Option+1…0 hotkey and `goto N` CLI.
+// "Desktop N" counts only ordinary desktops, matching the system's own numbering,
+// so the target is the Nth desktop index and the jump lands there directly, over
+// any fullscreen spaces in between. It sets the space by id rather than posting a
+// run of one-space Dock gestures: a gesture moves exactly one space, so a run is
+// both slow to cross and easy to overrun, while this is a single call.
+@discardableResult
+func jumpToDesktop(_ desktop: Int) -> Bool {
+    guard desktop >= 1, let info = spaceInfo(), let display = info.display,
+          desktop <= info.desktopIndices.count else { return false }
+    let targetIndex = info.desktopIndices[desktop - 1]
+    guard SLSManagedDisplaySetCurrentSpace(cid, display as CFString, info.ids[targetIndex]) == 0 else {
+        return false
+    }
+    // Keep relative switching consistent if the space list lags the jump.
+    predictedIndex = targetIndex
+    predictedDisplay = info.display
+    predictionTime = Date()
+    return true
+}
+
 // MARK: - Empty-desktop yank guard
 
 // Landing on a space with no ordinary windows makes macOS pick some other app
@@ -533,8 +645,17 @@ if args.count > 1 {
         // brief grace so the gesture events flush before exit
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.15))
         exit(0)
+    case "goto":
+        guard args.count > 2, let desktop = Int(args[2]), desktop >= 1 else {
+            FileHandle.standardError.write("usage: noswoosh goto <desktop-number>\n".data(using: .utf8)!)
+            exit(1)
+        }
+        jumpToDesktop(desktop)
+        // brief grace so the jump settles before exit
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.15))
+        exit(0)
     case "setup":
-        setCtrlArrowShortcuts(enabled: false)
+        setSystemSpaceShortcuts(enabled: false)
         // Versions 1.6.4 and earlier disabled the Dock's window-order space-follow
         // (workspaces-auto-swoosh) to suppress the empty-desktop yank. That also
         // killed Dock-icon-follow, because the Dock runs both off the same
@@ -548,19 +669,20 @@ if args.count > 1 {
         print("""
         noswoosh setup complete:
           - system animated Ctrl+arrow shortcuts disabled (live + persisted)
+          - system animated Switch-to-Desktop 1…10 shortcuts disabled (live + persisted)
         Remaining: start the daemon (brew services start noswoosh, or the
         LaunchAgent from install.sh) and grant it Accessibility permission.
         """)
         exit(0)
     case "teardown":
-        setCtrlArrowShortcuts(enabled: true)
-        print("noswoosh teardown complete: system Ctrl+arrow shortcuts re-enabled.")
+        setSystemSpaceShortcuts(enabled: true)
+        print("noswoosh teardown complete: system Ctrl+arrow and Switch-to-Desktop shortcuts re-enabled.")
         exit(0)
     case "version", "--version":
         print("noswoosh \(noswooshVersion)")
         exit(0)
     default:
-        FileHandle.standardError.write("usage: noswoosh [left | right | list | setup | teardown | version]\n".data(using: .utf8)!)
+        FileHandle.standardError.write("usage: noswoosh [left | right | goto N | list | setup | teardown | version]\n".data(using: .utf8)!)
         exit(1)
     }
 }
@@ -618,7 +740,8 @@ if yankGuardNeeded {
     log("empty-desktop yank guard off (macOS \(macOSMajor) handles it natively)")
 }
 
-// Input source 1: Ctrl+Left / Ctrl+Right hotkey.
+// Input source 1: Ctrl+Left/Right (relative) and Option+1…0 (straight to
+// Desktop 1…10). Hotkey ids: 1 = left, 2 = right, 21…30 = Desktop 1…10.
 var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
                               eventKind: UInt32(kEventHotKeyPressed))
 InstallEventHandler(GetApplicationEventTarget(), { _, event, _ -> OSStatus in
@@ -626,7 +749,12 @@ InstallEventHandler(GetApplicationEventTarget(), { _, event, _ -> OSStatus in
     GetEventParameter(event, EventParamName(kEventParamDirectObject),
                       EventParamType(typeEventHotKeyID), nil,
                       MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID)
-    switchSpace(right: hotKeyID.id == 2)
+    switch hotKeyID.id {
+    case 1: switchSpace(right: false)
+    case 2: switchSpace(right: true)
+    case 21...30: jumpToDesktop(Int(hotKeyID.id) - 20)
+    default: break
+    }
     return noErr
 }, 1, &eventType, nil, nil)
 
@@ -637,6 +765,24 @@ for (id, keyCode) in [(UInt32(1), UInt32(kVK_LeftArrow)), (UInt32(2), UInt32(kVK
                                      GetApplicationEventTarget(), 0, &ref)
     if status != noErr {
         log("could not register Ctrl+arrow hotkey (status \(status))")
+    }
+}
+
+// Option+1…0 jump straight to Desktop 1…10. `setup` disables the system's own
+// Switch-to-Desktop shortcuts (symbolic hotkeys 118…127) so they don't consume
+// these combos first.
+let desktopHotKeys: [(keyCode: Int, desktop: Int)] = [
+    (kVK_ANSI_1, 1), (kVK_ANSI_2, 2), (kVK_ANSI_3, 3), (kVK_ANSI_4, 4),
+    (kVK_ANSI_5, 5), (kVK_ANSI_6, 6), (kVK_ANSI_7, 7), (kVK_ANSI_8, 8),
+    (kVK_ANSI_9, 9), (kVK_ANSI_0, 10),
+]
+for (keyCode, desktop) in desktopHotKeys {
+    var ref: EventHotKeyRef?
+    let hotKeyID = EventHotKeyID(signature: OSType(0x5350_5357), id: UInt32(20 + desktop))
+    let status = RegisterEventHotKey(UInt32(keyCode), UInt32(optionKey), hotKeyID,
+                                     GetApplicationEventTarget(), 0, &ref)
+    if status != noErr {
+        log("could not register Option+\(desktop == 10 ? "0" : String(desktop)) hotkey (status \(status))")
     }
 }
 
@@ -660,6 +806,16 @@ let swipeCallback: CGEventTapCallBack = { _, type, ev, _ in
     }
 
     let et = ev.getIntegerValueField(fieldCGSEventType)
+
+    // Synthetic Dock gestures are posted from a process and carry that process's
+    // pid; real trackpad gestures come from the HID kernel with pid 0. Passing
+    // the synthetic ones through is the primary guard (the technique
+    // InstantSpaceSwitcher relies on) and, unlike the tag below, survives the
+    // system re-emitting a copy of a gesture with its user data stripped.
+    if (et == kCGSEventDockControl || et == kCGSEventGesture)
+        && ev.getIntegerValueField(.eventSourceUnixProcessID) != 0 {
+        return pass
+    }
 
     // Let our own synthetic events through without re-intercepting them.
     if (et == kCGSEventDockControl || et == kCGSEventGesture)

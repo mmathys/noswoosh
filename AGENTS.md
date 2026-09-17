@@ -6,13 +6,17 @@ code can't tell you.
 
 ## Shape
 
-Two input sources — the Ctrl+arrow hotkey and an event tap that intercepts real
-3-finger swipes — both call one `switchSpace(right:)` core. The core has two posting
-paths chosen by `needsAugmentation` (runtime `kern.osproductversion >= 27`): the
-lightweight pre-27 path (verified on macOS 26), and the macOS 27+ path that attaches a
-serialized IOHID payload. Keep new work behind that gate so a change to one OS can't
-regress the other. Verified on macOS 26 and 27 only — don't claim older releases the
-pre-27 path *should* handle but nobody has tested.
+Three input sources — the Ctrl+arrow hotkey, the Option+1…0 hotkeys, and an event tap
+that intercepts real 3-finger swipes — feed one `switchSpace(right:)` core.
+`jumpToDesktop(_:)` (the Option+number hotkeys and the `goto` CLI) is the exception: it
+sets the target space by id with `SLSManagedDisplaySetCurrentSpace` instead of calling
+the core, because a Dock gesture moves exactly one space and an absolute jump would be a
+slow, fragile run of them. The core has two posting paths chosen by
+`needsAugmentation` (runtime `kern.osproductversion >= 27`): the lightweight pre-27
+path (verified on macOS 26), and the macOS 27+ path that attaches a serialized IOHID
+payload. Keep new work behind that gate so a change to one OS can't regress the other.
+Verified on macOS 26 and 27 only — don't claim older releases the pre-27 path *should*
+handle but nobody has tested.
 
 ## Build and release
 
@@ -49,12 +53,23 @@ Don't "clean up" the manual byte writes into Swift structs; Swift doesn't guaran
 packing. If you touch it, re-verify on a real 27 (see VM testing below), not just a
 compile.
 
-**The passthrough counter couples the core and the tap.** Every synthetic event the
-core posts re-enters our own event tap. The core bumps `passthrough` by exactly the
-number of events it posts (1 per bare event, 2 per augmented pair); the tap decrements
-and passes those through instead of re-intercepting. If you change how many events a
-post emits, update the bump in lockstep or the tap will eat its own output or act on it
-twice.
+**The event tap must not re-intercept synthetic gestures.** Its primary guard is the
+event source pid: synthetic Dock swipes are posted from a process and carry that
+process's pid, while real trackpad gestures come from the HID kernel with pid 0, so the
+tap passes anything with a nonzero source pid. `noswooshEventTag` in `eventSourceUserData`
+is a second guard; a tag travels with the event, which a counter could not — that was #8:
+a running daemon intercepted the CLI's events and moved the wrong way. Keep both, and on
+the 27 path set the tag *after* `augment()`, which drops it. Do not "simplify" the pid
+guard away in favour of the tag alone (see the re-emission trap below).
+
+**A space change makes the system re-emit untagged Dock swipes.** On macOS 27.0 (26A428)
+a transition is re-injected as DockControl events with `eventSourceUserData` zeroed, so
+the tag guard misses it — but the copies keep the posting process's pid, so the pid guard
+catches them. It therefore has to come before the phase handling in the tap. A direct
+`jumpToDesktop` posts no gesture of its own and still triggers a pair of these; without
+the pid guard the tap reads them as two user swipes and the jump overshoots by two spaces
+(Option+3 from Desktop 1 lands on 5). A single-step switch passes with the bug present, so
+verify absolute jumps specifically, and by eye that they do not animate.
 
 **On macOS 27 the read and write sides use opposite sign conventions, on purpose.**
 `makeAugmentedDockEvent` must *post* negative-for-right on 27 (positive posts move left —

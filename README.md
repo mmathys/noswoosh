@@ -1,8 +1,8 @@
 # noswoosh
 
-Instant, animation-free switching between macOS Spaces (**3-finger swipe** or
-**Ctrl+←/→**). Works on **macOS 26.6+ and 27**, no SIP disabling, no global Reduce
-Motion.
+Instant, animation-free switching between macOS Spaces (**3-finger swipe**,
+**Ctrl+←/→**, or **Option+1…0** to jump straight to a Desktop). Works on
+**macOS 26.6+ and 27**, no SIP disabling, no global Reduce Motion.
 
 [![Latest release](https://img.shields.io/github/v/release/mmathys/noswoosh?color=blue)](https://github.com/mmathys/noswoosh/releases/latest)
 [![MIT license](https://img.shields.io/github/license/mmathys/noswoosh?color=blue)](LICENSE)
@@ -24,8 +24,8 @@ it's the one step that can't be scripted. Approve the prompt on first start; if 
 dismiss it, noswoosh opens **System Settings → Privacy & Security → Accessibility**
 for you, where you can add `/Applications/noswoosh.app` yourself.
 
-That's it — the daemon picks the grant up within a second, and both a **3-finger
-horizontal swipe** and **Ctrl+←/→** switch spaces instantly.
+That's it — the daemon picks the grant up within a second, and a **3-finger
+horizontal swipe**, **Ctrl+←/→**, and **Option+1…0** all switch spaces instantly.
 
 <details>
 <summary><b>Build from source instead</b></summary>
@@ -49,12 +49,15 @@ build, which keeps the grant across rebuilds.
 
 ## Usage
 
-Two ways to switch, both instant:
+Three ways to switch, all instant:
 
 - **3-finger horizontal swipe** — your normal Spaces gesture, minus the animation.
   noswoosh intercepts the real swipe and replaces it with an instant switch;
   vertical swipes (Mission Control, App Exposé) are left untouched.
 - **Ctrl+→ / Ctrl+←** — one space right/left.
+- **Option+1 … Option+0** — jump straight to Desktop 1…10, however far away. This
+  replaces the system's animated "Switch to Desktop N" shortcuts, which `setup`
+  disables so they don't consume the combo first.
 
 Movement is clamped at the first and last space, so there's no rubber-band bounce.
 
@@ -68,13 +71,15 @@ A CLI is available for scripting and debugging:
 noswoosh list      # "space 2 of 4"
 noswoosh right     # switch once and exit
 noswoosh left
+noswoosh goto 3    # jump straight to Desktop 3 and exit
 noswoosh setup     # apply system config (teardown reverses it)
 noswoosh teardown
 noswoosh version
 ```
 
-For a custom shortcut, bind `noswoosh left` / `noswoosh right` in any hotkey tool that
-runs a command — [skhd](https://github.com/koekeishiya/skhd),
+For a custom shortcut, bind `noswoosh left` / `noswoosh right` (or `noswoosh goto N`
+for a direct jump) in any hotkey tool that runs a command —
+[skhd](https://github.com/koekeishiya/skhd),
 [Karabiner-Elements](https://karabiner-elements.pqrs.org),
 [Hammerspoon](https://www.hammerspoon.org) or [Raycast](https://www.raycast.com). The
 switch lands in ~100ms either way, so there's no speed penalty versus the built-in
@@ -101,9 +106,11 @@ instant.
 
 Two input sources feed one switch core. An **event tap** watches for real 3-finger
 horizontal swipes, suppresses them before the Dock animates, and posts the instant
-switch — so a natural swipe still works, just without the slide. A Ctrl+arrow **hotkey**
-posts the same switch directly. The two are independent: if the tap is ever disabled by
-the system, Ctrl+←/→ keeps working.
+switch — so a natural swipe still works, just without the slide. A **hotkey** posts the
+same switch directly: Ctrl+arrow moves one space, while Option+1…0 go straight to a
+Desktop by id (the one path that doesn't run through the Dock, since a swipe moves only
+one space). The two are independent: if the tap is ever disabled by the system, the
+hotkeys keep working.
 
 **macOS 27** tightened this up: it validates synthetic Dock swipes against a serialized
 IOHID payload the older technique doesn't carry, so pre-27 builds silently stop
@@ -171,6 +178,9 @@ daemon re-trigger the prompt, then approve it. If it still won't take:
 launchctl kickstart -k gui/$(id -u)/ax.max.noswoosh
 ```
 
+**Option+1…0 does nothing.** Run `noswoosh setup`; without it the system's own
+"Switch to Desktop N" shortcuts swallow the combo first.
+
 **Spaces switch in an unexpected order.** Turn off "Automatically rearrange Spaces
 based on most recent use" in System Settings → Desktop & Dock.
 
@@ -185,12 +195,16 @@ based on most recent use" in System Settings → Desktop & Dock.
   switching), and why each fails — is in
   [issue #1](https://github.com/mmathys/noswoosh/issues/1). **The fix is to update
   macOS to 26.6 or later.**
-- **Private APIs.** `SLSCopyManagedDisplaySpaces`, the undocumented gesture
-  `CGEventField`s, and the macOS 27 IOHID payload layout are all unsupported by Apple
+- **Private APIs.** `SLSCopyManagedDisplaySpaces`, `SLSManagedDisplaySetCurrentSpace`
+  (the Option+number jumps), the undocumented gesture `CGEventField`s, and the macOS 27
+  IOHID payload layout are all unsupported by Apple
   and reverse-engineered — any macOS release can change them. When a release does, the
   symptom is switches silently stopping; the fix is adapting the gesture payload (as the
   26 → 27 change already required). noswoosh gates each path behind a runtime OS check so
   a future break can be isolated to one path.
+- **Option+1…0 are global.** `setup` disables the system's Switch-to-Desktop
+  shortcuts to make room for them, and the daemon then owns those combos — any other
+  app that binds Option+number loses it while noswoosh is running.
 - **Apple Silicon quirk.** The reference implementations use `FLT_TRUE_MIN` as the
   gesture progress; that subnormal float is flushed to zero (sign lost) somewhere in the
   event pipeline on Apple Silicon, making every switch go the same direction. This port
@@ -204,8 +218,9 @@ based on most recent use" in System Settings → Desktop & Dock.
 brew uninstall --cask noswoosh     # or: ./scripts/uninstall.sh, from source
 ```
 
-This stops the daemon, removes the LaunchAgent, and restores the system Ctrl+arrow
-shortcuts that `setup` disabled. Remove the Accessibility entry manually if you like.
+This stops the daemon, removes the LaunchAgent, and restores the system space shortcuts
+(Ctrl+arrow and Switch to Desktop 1…10) that `setup` disabled. Remove the Accessibility
+entry manually if you like.
 
 ## Contributing
 
