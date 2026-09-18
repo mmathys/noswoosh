@@ -1,6 +1,7 @@
 import Cocoa
 import Carbon.HIToolbox
 import ApplicationServices
+import ServiceManagement
 
 // noswoosh — instant macOS space switching (verified on macOS 26 and 27, Apple Silicon).
 //
@@ -42,6 +43,12 @@ import ApplicationServices
 // com.apple.dock workspaces-auto-swoosh override older versions set — see the
 // yank guard below and the setup case for why we no longer touch it.)
 //
+// Homebrew's install steps now run in a sandbox that denies mach-lookup, so the
+// cask can no longer run setup or start anything at install time (#13). The
+// daemon therefore sets itself up on every launch: it applies the system setup,
+// registers itself as a login item (SMAppService), and migrates old installs
+// off the cask-era LaunchAgent. Every step is idempotent.
+//
 // Build: swiftc noswoosh.swift -O -o noswoosh \
 //          -F /System/Library/PrivateFrameworks -framework SkyLight
 
@@ -60,6 +67,22 @@ func runTool(_ path: String, _ arguments: [String]) -> Bool {
     } catch {
         return false
     }
+}
+
+// Like runTool, but returns captured stdout (nil on a nonzero exit).
+func runToolOutput(_ path: String, _ arguments: [String]) -> String? {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: path)
+    process.arguments = arguments
+    let out = Pipe()
+    process.standardOutput = out
+    process.standardError = FileHandle.nullDevice
+    do { try process.run() } catch { return nil }
+    // Drain before waiting, or a chatty tool fills the pipe and deadlocks both.
+    let data = out.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else { return nil }
+    return String(data: data, encoding: .utf8)
 }
 
 // hotkey 79 = "move left a space" (ctrl+left, key code 123),
@@ -81,6 +104,50 @@ func setCtrlArrowShortcuts(enabled: Bool) {
                                           "AppleSymbolicHotKeys", "-dict-add",
                                           String(hotKey), entry])
     }
+}
+
+// The whole of `noswoosh setup`, shared with the daemon, which runs it on every
+// launch (see the header) — so everything in here must stay idempotent.
+func applySystemSetup() {
+    setCtrlArrowShortcuts(enabled: false)
+    // Versions 1.6.4 and earlier disabled the Dock's window-order space-follow
+    // (workspaces-auto-swoosh) to suppress the empty-desktop yank. That also
+    // killed Dock-icon-follow, because the Dock runs both off the same
+    // notification. The daemon's yank guard handles the yank directly now, so
+    // leave the pref at the macOS default. Clear an override a prior version
+    // left — restarting the Dock only if we actually removed one, so a fresh
+    // install gets no gratuitous restart.
+    if runTool("/usr/bin/defaults", ["delete", "com.apple.dock", "workspaces-auto-swoosh"]) {
+        _ = runTool("/usr/bin/killall", ["Dock"])
+    }
+}
+
+// MARK: - Login item (SMAppService), and the LaunchAgent era it replaces
+
+// The bundle we run from, or nil for a bare binary (scripts/install.sh installs
+// one). Bare installs keep the hand-written LaunchAgent flow; everything login-
+// item- and migration-related is bundle-only.
+let appBundleURL: URL? =
+    Bundle.main.bundleURL.pathExtension == "app" ? Bundle.main.bundleURL : nil
+
+// The label both the cask's postflight and install.sh bootstrap(ped) their
+// LaunchAgent under. The cask era is over (#13); install.sh still uses it.
+let legacyAgentLabel = "ax.max.noswoosh"
+let legacyAgentPlistPath =
+    ("~/Library/LaunchAgents/\(legacyAgentLabel).plist" as NSString).expandingTildeInPath
+
+// Register the login item once, not on every launch: the user can switch it off
+// in System Settings > General > Login Items, and re-registering would silently
+// re-enable it — fighting a choice the user already made. The flag lives in our
+// own defaults domain, so upgrades keep it and `teardown` (below) resets it.
+let loginItemRegisteredKey = "loginItemRegistered"
+
+// teardown's other half of the registration: unregister, and forget we ever
+// registered so a later `setup`/first launch registers again.
+func unregisterLoginItem() {
+    UserDefaults.standard.removeObject(forKey: loginItemRegisteredKey)
+    guard appBundleURL != nil, #available(macOS 13.0, *) else { return }
+    try? SMAppService.mainApp.unregister()
 }
 
 // MARK: - Private SkyLight reads (space bookkeeping only)
@@ -572,17 +639,7 @@ if args.count > 1 {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.15))
         exit(0)
     case "setup":
-        setCtrlArrowShortcuts(enabled: false)
-        // Versions 1.6.4 and earlier disabled the Dock's window-order space-follow
-        // (workspaces-auto-swoosh) to suppress the empty-desktop yank. That also
-        // killed Dock-icon-follow, because the Dock runs both off the same
-        // notification. The daemon's yank guard handles the yank directly now, so
-        // leave the pref at the macOS default. Clear an override a prior version
-        // left — restarting the Dock only if we actually removed one, so a fresh
-        // install gets no gratuitous restart.
-        if runTool("/usr/bin/defaults", ["delete", "com.apple.dock", "workspaces-auto-swoosh"]) {
-            _ = runTool("/usr/bin/killall", ["Dock"])
-        }
+        applySystemSetup()
         print("""
         noswoosh setup complete:
           - system animated Ctrl+arrow shortcuts disabled (live + persisted)
@@ -592,7 +649,12 @@ if args.count > 1 {
         exit(0)
     case "teardown":
         setCtrlArrowShortcuts(enabled: true)
-        print("noswoosh teardown complete: system Ctrl+arrow shortcuts re-enabled.")
+        unregisterLoginItem()
+        if appBundleURL != nil {
+            print("noswoosh teardown complete: system Ctrl+arrow shortcuts re-enabled, login item removed.")
+        } else {
+            print("noswoosh teardown complete: system Ctrl+arrow shortcuts re-enabled.")
+        }
         exit(0)
     case "version", "--version":
         print("noswoosh \(noswooshVersion)")
@@ -609,12 +671,98 @@ func log(_ message: String) {
     FileHandle.standardError.write("noswoosh: \(message)\n".data(using: .utf8)!)
 }
 
-// Accessibility trust is evaluated when the process starts and cached for its
-// lifetime, so a grant made while we are running does not take effect. Rather
-// than making the user restart the daemon by hand, poll and exit once trusted:
-// the LaunchAgent sets KeepAlive, so launchd immediately starts a fresh process
-// that picks the grant up. Run outside launchd there is nothing to restart us,
-// so say so instead.
+// MARK: - Setup on launch (#13)
+
+func registerLoginItem() {
+    guard appBundleURL != nil else { return }   // bare binaries have no identity to register
+    guard #available(macOS 13.0, *) else { return }
+    // Escape hatch for development: a scratch build that registers itself would
+    // point the login item at the scratch bundle.
+    if ProcessInfo.processInfo.environment["NOSWOOSH_SKIP_LOGIN_ITEM"] == "1" { return }
+    guard !UserDefaults.standard.bool(forKey: loginItemRegisteredKey) else { return }
+    let service = SMAppService.mainApp
+    if service.status == .enabled {   // registered out-of-band (or the flag was wiped)
+        UserDefaults.standard.set(true, forKey: loginItemRegisteredKey)
+        return
+    }
+    do {
+        try service.register()
+        UserDefaults.standard.set(true, forKey: loginItemRegisteredKey)
+        log("registered as a login item")
+        if service.status == .requiresApproval {
+            log("login item needs approval: System Settings > General > Login Items & Extensions")
+        }
+    } catch {
+        // Flag deliberately not set: retry on the next launch.
+        log("could not register login item: \(error.localizedDescription)")
+    }
+}
+
+// The upgrade path from the LaunchAgent era. Anyone installed before this has
+// ~/Library/LaunchAgents/ax.max.noswoosh.plist written by the cask's postflight,
+// pointing at the app bundle. Now that the app registers with SMAppService,
+// launch must boot that job out and delete the plist — otherwise launchd and
+// SMAppService each start a copy, two daemons race the same hotkeys and event
+// tap, and `teardown` only knows about one of them. It survives the reverse
+// order too (a stale `brew reinstall` dropping the old plist back after the
+// login item is live) and is idempotent, since it runs on every launch.
+//
+// Returns whether *this process* is the legacy job's own — i.e. launchd started
+// us from the old plist, and a bootout of the label would SIGKILL us. That case
+// keeps running under the job for the rest of the session: the plist is already
+// gone so the job dies at next login, and its KeepAlive is even useful (the
+// Accessibility-grant restart below relies on it). Quit and the grant-restart
+// both check this flag, because a plain exit() under KeepAlive gets resurrected.
+func migrateFromLaunchAgentEra() -> Bool {
+    guard appBundleURL != nil else { return false }
+
+    // The plist — but only if it is the cask era's (ProgramArguments points into
+    // a noswoosh.app). install.sh writes the same label pointing at ~/.local/bin;
+    // that one belongs to the source-install flow and is not ours to remove.
+    if let data = FileManager.default.contents(atPath: legacyAgentPlistPath),
+       let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+       let program = ((plist as? [String: Any])?["ProgramArguments"] as? [String])?.first,
+       program.contains("noswoosh.app/Contents/MacOS/noswoosh") {
+        try? FileManager.default.removeItem(atPath: legacyAgentPlistPath)
+        log("removed the LaunchAgent-era plist (the login item starts us now)")
+    }
+
+    // The loaded job, which outlives its plist until bootout or logout. Same
+    // cask-era check, this time against launchd's own record of the program.
+    guard let job = runToolOutput("/bin/launchctl", ["print", "gui/\(getuid())/\(legacyAgentLabel)"]),
+          job.contains("noswoosh.app/Contents/MacOS/noswoosh") else { return false }
+    let jobPID = job.split(separator: "\n")
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+        .first { $0.hasPrefix("pid = ") }
+        .flatMap { Int32($0.dropFirst("pid = ".count)) }
+
+    if jobPID != getpid() {
+        // The job is someone else's process (or idle). Booting it out kills any
+        // second daemon and removes the job for this session in one move.
+        _ = runTool("/bin/launchctl", ["bootout", "gui/\(getuid())/\(legacyAgentLabel)"])
+        log("booted out the LaunchAgent-era job")
+        return false
+    }
+
+    // launchd started us from the old plist. If another instance of the bundle
+    // is already running (a stale reinstall re-bootstrapped the plist while the
+    // login-item copy was up), yield to it — via bootout, not exit(), so
+    // KeepAlive cannot resurrect us and the job is gone for the session.
+    let bundleID = Bundle.main.bundleIdentifier ?? ""
+    if NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+        .contains(where: { $0.processIdentifier != getpid() }) {
+        log("another noswoosh is already running — removing the LaunchAgent-era job (exits)")
+        _ = runTool("/bin/launchctl", ["bootout", "gui/\(getuid())/\(legacyAgentLabel)"])
+        exit(0)   // bootout normally kills us first; this covers it failing
+    }
+    log("running under the LaunchAgent-era job until next login (its plist is removed)")
+    return true
+}
+
+applySystemSetup()
+let launchedByLegacyAgent = migrateFromLaunchAgentEra()
+registerLoginItem()
+
 // MARK: - Menu bar item
 
 // A status item gives the daemon somewhere to live that the user can see and
@@ -638,15 +786,19 @@ func menuBarImage() -> NSImage? {
     return image
 }
 
-// TODO(#13): upgrade path from the LaunchAgent era. Anyone installed before this
-// has ~/Library/LaunchAgents/ax.max.noswoosh.plist written by the cask's postflight,
-// pointing at the app bundle. Once setup moves in here and registers with
-// SMAppService, first launch must boot that job out and delete the plist — otherwise
-// launchd and SMAppService each start a copy, two daemons race the same hotkeys and
-// event tap, and `teardown` only knows about one of them. Must also survive the
-// reverse order (new version installed, old plist arriving later from a stale
-// `brew reinstall`), and must be idempotent: it runs on every launch, not just the
-// first after upgrading.
+// Quit needs a real handler, not NSApplication.terminate directly: while we run
+// under the LaunchAgent-era job (see migrateFromLaunchAgentEra), a plain exit is
+// resurrected by its KeepAlive, so Quit has to take the job down with it.
+final class MenuActions: NSObject {
+    @objc func quit(_ sender: Any?) {
+        if launchedByLegacyAgent {
+            _ = runTool("/bin/launchctl", ["bootout", "gui/\(getuid())/\(legacyAgentLabel)"])
+        }
+        NSApp.terminate(nil)
+    }
+}
+let menuActions = MenuActions()
+
 func installStatusItem() {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     guard let button = item.button else { return }
@@ -663,12 +815,22 @@ func installStatusItem() {
     menu.addItem(.separator())
     // No key equivalent: the menu is only reachable by clicking the status item,
     // and a stray Cmd+Q here would shadow the frontmost app's own Quit.
-    menu.addItem(NSMenuItem(title: "Quit",
-                            action: #selector(NSApplication.terminate(_:)), keyEquivalent: ""))
+    let quit = NSMenuItem(title: "Quit",
+                          action: #selector(MenuActions.quit(_:)), keyEquivalent: "")
+    quit.target = menuActions
+    menu.addItem(quit)
     item.menu = menu
     statusItem = item
 }
 
+// Accessibility trust is evaluated when the process starts and cached for its
+// lifetime, so a grant made while we are running does not take effect. Rather
+// than making the user restart the daemon by hand, poll and exit once trusted.
+// How we come back depends on how we were started: a LaunchAgent's KeepAlive
+// restarts us by itself; a login-item launch has no KeepAlive, so relaunch the
+// bundle with `open -n` (LaunchServices makes the new instance its own
+// TCC-responsible process, and it outlives us where a child would not); a bare
+// binary run by hand we can only ask.
 let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
 if !AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary) {
     log("waiting for Accessibility permission (System Settings > Privacy & Security > Accessibility)")
@@ -676,8 +838,11 @@ if !AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary) {
     var openedSettings = false
     Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
         if AXIsProcessTrusted() {
-            if getppid() == 1 {
+            if launchedByLegacyAgent || (appBundleURL == nil && getppid() == 1) {
                 log("Accessibility granted — restarting to apply it")
+            } else if let bundle = appBundleURL {
+                log("Accessibility granted — relaunching to apply it")
+                _ = runTool("/usr/bin/open", ["-n", bundle.path])
             } else {
                 log("Accessibility granted — restart noswoosh to apply it")
             }
