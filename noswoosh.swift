@@ -45,7 +45,7 @@ import ApplicationServices
 // Build: swiftc noswoosh.swift -O -o noswoosh \
 //          -F /System/Library/PrivateFrameworks -framework SkyLight
 
-let noswooshVersion = "1.7.5"
+let noswooshVersion = "1.7.6"
 
 // MARK: - Setup / teardown (system configuration, all user-level)
 
@@ -169,8 +169,8 @@ func spaceInfo() -> SpaceInfo? {
 // MARK: - macOS version gate
 
 // Major version of the running OS — not the build SDK — or 0 if it can't be read.
-// Two gates key off this (the IOHID payload below and the yank guard); keep it one
-// read so they can't disagree.
+// The IOHID payload gate below is the only thing that keys off this. (The yank guard
+// used to as well, until 1.7.6 — see issue #15 for why that gate was wrong.)
 func macOSMajorVersion() -> Int {
     var buf = [CChar](repeating: 0, count: 32)
     var size = buf.count
@@ -470,11 +470,13 @@ func switchSpace(right: Bool) {
 // already going. Requires .accessory (not .prohibited) — a prohibited app
 // cannot become active at all.
 //
-// Verified on macOS 26.6: 3/3 yanked without the guard, 0/3 with it. Two things
-// that do NOT work, so don't "simplify" to them: parking a real window on the
-// destination space (verified resident, still yanks — emptiness is the trigger,
-// not the cause), and activating BEFORE the switch (the switch re-activates
-// macOS's pick at landing and wipes it out). It has to be on landing.
+// Verified on macOS 26.6: 3/3 yanked without the guard, 0/3 with it. Re-verified on
+// 27.0 (26A428) for issue #15: 8/8 without, 0/8 with. Three things that do NOT work,
+// so don't "simplify" to them: parking a real window on the destination space
+// (verified resident, still yanks — emptiness is the trigger, not the cause),
+// activating BEFORE the switch (the switch re-activates macOS's pick at landing and
+// wipes it out), and activating Finder instead of ourselves (6/6 yanked, to Finder's
+// own window's space). It has to be on landing, and it has to be a windowless app.
 
 // Is any ordinary (layer 0) window resident on this space?
 func spaceHasWindows(_ spaceID: UInt64) -> Bool {
@@ -490,21 +492,30 @@ func spaceHasWindows(_ spaceID: UInt64) -> Bool {
     return spaces.contains { $0.uint64Value == spaceID }
 }
 
-// macOS 27 fixed this at the source: it activates **Finder** on a windowless
-// landing. Finder owns the desktop and has no off-space window to order in, so the
-// chain never starts and nothing yanks — measured 4/4 rounds on 27.0 (26A5416b) with
-// a browser parked on another space, versus a reliable yank on 26.6. Running the
-// guard there would only displace Finder, and on an empty desktop a user expects
-// Finder active (desktop clicks, its menu bar, Cmd+N). So gate it off on 27+.
+// 1.7.0-1.7.5 gated this off on 27, on the belief that 27 had fixed it at the source
+// by always activating **Finder** on a windowless landing — Finder owns the desktop,
+// so it has no off-space window to order in and the chain never starts. That was
+// measured 4/4 in a VM with one browser parked on another space, and it is true only
+// of that arrangement. On a real desktop 27 picks whichever app was most recently
+// used, exactly like 26, and the yank is back. Measured on 27.0 (26A428) with a
+// full-screen space next to an empty one: 8/8 switches ended on the wrong space with
+// the guard off, 0/8 with it on (issue #15).
 //
-// An unreadable version (0) means run it: a needless activation on an unknown OS is
-// a far cheaper mistake than the yank coming back on one that needs the guard.
-// NOSWOOSH_FORCE_YANK_GUARD=0/1 overrides, for testing either side without a rebuild.
+// Finder is not even reliably safe. Activating Finder *by hand* on a windowless
+// landing yanked 6/6 times — to whichever space Finder's own window was on. The one
+// app guaranteed to have no off-space window to order in is a windowless one, i.e.
+// us, which is why the guard activates itself rather than handing focus to Finder.
+//
+// So the guard now runs on every version. Its cost on 27 is the same one it already
+// pays on 26 and is smaller than it sounds: we have no windows and no menu, so the
+// menu bar on that empty desktop still reads "Finder" — verified by screenshot on
+// 27.0. NOSWOOSH_FORCE_YANK_GUARD=0/1 still overrides, for testing either side
+// without a rebuild.
 let yankGuardNeeded: Bool = {
     if let force = ProcessInfo.processInfo.environment["NOSWOOSH_FORCE_YANK_GUARD"] {
         return force == "1"
     }
-    return macOSMajor < 27
+    return true
 }()
 
 // Daemon-only: a CLI switch exits within 150ms, so claiming activation there
@@ -639,10 +650,8 @@ let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 if yankGuardNeeded {
     installYankGuard()
-} else if ProcessInfo.processInfo.environment["NOSWOOSH_FORCE_YANK_GUARD"] != nil {
-    log("empty-desktop yank guard off (forced by NOSWOOSH_FORCE_YANK_GUARD)")
 } else {
-    log("empty-desktop yank guard off (macOS \(macOSMajor) handles it natively)")
+    log("empty-desktop yank guard off (forced by NOSWOOSH_FORCE_YANK_GUARD)")
 }
 
 // Input source 1: Ctrl+Left / Ctrl+Right hotkey.

@@ -146,10 +146,18 @@ The daemon has no windows and no menu, so the menu bar stays with whatever macOS
 picked and nothing is visible. The only trace is that keystrokes typed at an empty
 desktop go nowhere — which is where they were already going.
 
-**macOS 27 doesn't need this, and doesn't get it.** 27 activates Finder on a windowless
-landing; Finder owns the desktop and has no off-space window to order in, so the chain
-never starts. The guard is gated off on 27+ — running it there would only displace
-Finder, and on an empty desktop that's the app you want active.
+**This runs on macOS 27 too.** 1.7.0-1.7.5 gated the guard off on 27, on the belief
+that 27 always activated Finder on a windowless landing — Finder owns the desktop, so it
+has no off-space window to order in and the chain never starts. That turned out to be a
+property of the machine it was measured on, not of 27: on a desktop with apps spread
+across several spaces, 27 picks the most recently used app exactly like 26 does, and the
+yank comes back. Measured on 27.0: 8/8 switches off a full-screen space landed on the
+wrong desktop with the guard off, 0/8 with it on ([#15](https://github.com/mmathys/noswoosh/issues/15)).
+Restored in 1.7.6.
+
+Activating *Finder* instead is not a fix — it yanks you to wherever Finder's own window
+is (6/6 in the same test). The only app guaranteed to have no off-space window to order
+in is one with no windows at all, which is why the daemon activates itself.
 
 Two variants that seem like they should work and don't, recorded so nobody re-tries
 them: parking a real window on the destination space (verified resident — it still
