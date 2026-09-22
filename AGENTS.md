@@ -70,9 +70,9 @@ field constants.
 taking activation the moment we land on a space with no windows. A `.prohibited` app
 cannot become active at all, so "tidying" the policy back silently reintroduces the
 empty-desktop yank with no error and no log line. Neither policy shows a Dock icon or
-a Cmd-Tab entry, so the change is invisible until you test on an empty desktop. Note the guard only
-runs on macOS < 27 (`yankGuardNeeded`), so testing this on a 27 box proves nothing —
-use `NOSWOOSH_FORCE_YANK_GUARD=1` there, or test on 26.
+a Cmd-Tab entry, so the change is invisible until you test on an empty desktop. The guard
+runs on every version since 1.7.6 — `NOSWOOSH_FORCE_YANK_GUARD=0` turns it off if you need
+the broken side for comparison.
 
 **The yank guard has to fire on landing, not before.** Taking activation ahead of the
 switch does nothing — the switch re-activates macOS's own pick when it commits. And
@@ -189,7 +189,8 @@ The yank guard is **not** behind `needsAugmentation` — it posts no events, so 
 identically on both OSes and gets none of the protection that gate normally gives you.
 Its correctness depends on macOS behavior that 27 could change, and every failure mode
 is silent: the yank simply comes back, with no error and no log line. Unlike swipe, it
-*can* be tested in the VM (no trackpad needed).
+*can* be tested in the VM (no trackpad needed) — but see the retraction below for why a
+VM alone is not enough to conclude the guard is unnecessary.
 
 Do these in order; the first is cheapest and invalidates the rest if it fails.
 
@@ -253,27 +254,42 @@ that is worth knowing before it shows up as a flaky yank under load.
 - *Follow: works*, with the pref at default. 1.7.0's `setup` correctly cleared a legacy
   `workspaces-auto-swoosh = 0` left by an older build and restarted the Dock.
 - *`.accessory` policy: works* — `NSApp.activate()` succeeds on 27.
-- *The yank does not happen on 27, and we know why.* **27 activates Finder** when you
-  land on a windowless space. Finder owns the desktop and has no off-space window to
-  order in, so the chain never starts — no follow-rule log line, no yank, 4/4 rounds
-  with no daemon running and a browser (Safari) parked on another space. 26.6 instead
-  picks a real app with a window elsewhere and yanks you to it; traced on the host the
-  same day at 20ms resolution: land on empty space at 64ms, yanked at 456ms, Dock logs
+- *The yank appeared not to happen on 27 — **this conclusion was wrong**, see the
+  retraction below.* What was measured: landing on a windowless space activated
+  **Finder**, which owns the desktop and so has no off-space window to order in, so the
+  chain never started — no follow-rule log line, no yank, 4/4 rounds with no daemon
+  running and a browser (Safari) parked on another space. 26.6 instead picks a real app
+  with a window elsewhere and yanks you to it; traced on the host the same day at 20ms
+  resolution: land on empty space at 64ms, yanked at 456ms, Dock logs
   `switching to space 121 for window(5ea9) ... ordered on non-visible space` (that
   window belonged to whichever ordinary app macOS happened to pick — Arc in one
-  session, Tart in another). Apple appears to have fixed this at the source in 27.
-  The race margin is therefore unmeasurable on 27 — there is no race.
+  session, Tart in another).
 
-  **Consequence for the guard: on 27 it is unnecessary, and it displaces Finder.**
-  Verified in the VM — with the 1.7.0 daemon running, landing on the windowless space
-  makes *noswoosh* frontmost instead of Finder. Harmless in the sense that nothing
-  yanks, but on an empty desktop 27 users would expect Finder to be active (desktop
-  clicks, Finder menu bar, Cmd+N). **Fixed:** the guard is now gated on `macOSMajor < 27`
-  via `yankGuardNeeded`, sharing one `kern.osproductversion` read with
-  `needsAugmentation` so the two gates can't disagree. Override either way with
-  `NOSWOOSH_FORCE_YANK_GUARD=0/1`. An unreadable version runs the guard — a needless
-  activation is cheaper than the yank returning. The daemon logs one line when it skips
-  the guard, so the OS decision isn't silent. Caveat: one VM, one build (26A5416b).
+**Retraction (2026-09-23, issue #15, macOS 27.0 26A428, bare metal).** 27 did *not* fix
+this. It picks the most-recently-used app on a windowless landing exactly like 26 does;
+the VM just happened to have an app layout where that pick was always Finder. One
+browser parked on one other space is not a desktop, and the conclusion did not survive
+contact with a real one. Two measurements, `mru-spaces` off so positions are stable, a
+seven-space layout with four empty spaces:
+
+| transition | guard off (shipped 1.7.5) | guard on |
+| --- | --- | --- |
+| full-screen space → empty space | 8/8 landed on the wrong space | 0/8 |
+| ordinary space → empty space | 6/6 wrong | 0/8 |
+| seven-transition sweep, ×4 each | 16/28 wrong | 0/28 |
+
+Two things worth carrying forward. **Finder is not a safe app to activate.** Activating
+Finder by hand on a windowless landing yanked 6/6 — to whichever space Finder's *own*
+window was on. The only app guaranteed to have nothing to order in is a windowless one,
+which is why the guard activates itself and not Finder. **And the displacement cost is
+not real:** with the guard holding activation on an empty 27 desktop the menu bar still
+reads "Finder", because we have no windows and no menu of our own — screenshotted on
+27.0. That was the entire argument for gating the guard off, and it does not hold.
+
+Generalisable lesson: this gate was turned off on the strength of a 4/4 run in a VM
+whose window layout was a special case of the thing being measured. When a guard's
+failure mode is silent, "I could not make it happen" is not evidence that it cannot.
+Test on a machine with a real spread of apps across spaces, or don't change the gate.
 
 Two traps that cost time here, both worth avoiding: `rm -rf`-ing the bundle while the
 old daemon runs leaves that process on the orphaned inode, so it keeps serving the
