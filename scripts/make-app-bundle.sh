@@ -18,9 +18,9 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-VERSION=$(sed -n 's/^let noswooshVersion = "\(.*\)"$/\1/p' noswoosh.swift)
+VERSION=$(sed -n 's/^let noswooshVersion = "\(.*\)"$/\1/p' Sources/Version.swift)
 if [ -z "$VERSION" ]; then
-    echo "could not read noswooshVersion from noswoosh.swift" >&2
+    echo "could not read noswooshVersion from Sources/Version.swift" >&2
     exit 1
 fi
 
@@ -28,7 +28,7 @@ BUILD_TMP=""
 if [ -z "$BINARY" ]; then
     echo "==> Building noswoosh $VERSION"
     BUILD_TMP=$(mktemp -d)
-    swiftc noswoosh.swift -O -o "$BUILD_TMP/noswoosh" \
+    swiftc Sources/*.swift -O -o "$BUILD_TMP/noswoosh" \
         -F /System/Library/PrivateFrameworks -framework SkyLight
     BINARY="$BUILD_TMP/noswoosh"
 fi
@@ -52,6 +52,14 @@ if [ -f assets/icon-rounded.png ]; then
     iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
     rm -rf "$(dirname "$ICONSET")"
 fi
+
+# Menu bar glyph. A template image: black pixels plus alpha, which macOS tints
+# for light/dark menu bars and for the highlighted state. Shipped at 1x and 2x
+# rather than as one big image, so it is never resampled at display size.
+for scale in "" "@2x"; do
+    src="assets/menubar-icon${scale}.png"
+    [ -f "$src" ] && cp "$src" "$APP/Contents/Resources/menubar-icon${scale}.png"
+done
 
 if [ -n "$BUILD_TMP" ]; then rm -rf "$BUILD_TMP"; fi
 

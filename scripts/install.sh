@@ -16,7 +16,7 @@ if ! command -v swiftc >/dev/null; then
 fi
 
 echo "==> Building noswoosh"
-swiftc noswoosh.swift -O -o noswoosh \
+swiftc Sources/*.swift -O -o noswoosh \
     -F /System/Library/PrivateFrameworks -framework SkyLight
 
 # Opt-in: a stable Developer ID signature keeps the Accessibility grant across
@@ -36,7 +36,10 @@ mkdir -p "$BIN_DIR"
 # makes it a memorable afternoon. A fresh inode avoids it entirely.
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 rm -f "$BIN_DIR/noswoosh"
-cp noswoosh noswoosh.swift "$BIN_DIR/"
+cp noswoosh "$BIN_DIR/"
+# Older installs also dropped the single-file source next to the binary. The
+# source is a directory now, so it stays in the repo; clear the stale copy.
+rm -f "$BIN_DIR/noswoosh.swift"
 
 echo "==> Configuring system (disables the animated Ctrl+arrow shortcuts)"
 "$BIN_DIR/noswoosh" setup

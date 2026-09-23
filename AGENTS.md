@@ -1,6 +1,6 @@
 # Working on noswoosh
 
-One Swift file (`noswoosh.swift`), a bundle script, and a release workflow. Read the
+A handful of Swift files under `Sources/`, a bundle script, and a release workflow. Read the
 source comments first — they explain the technique. This file covers only what the
 code can't tell you.
 
@@ -17,11 +17,11 @@ pre-27 path *should* handle but nobody has tested.
 ## Build and release
 
 ```sh
-swiftc noswoosh.swift -O -o noswoosh -F /System/Library/PrivateFrameworks -framework SkyLight
+swiftc Sources/*.swift -O -o noswoosh -F /System/Library/PrivateFrameworks -framework SkyLight
 ./scripts/make-app-bundle.sh --out build     # assembles noswoosh.app
 ```
 
-Releasing is a tag push: bump `noswooshVersion` in `noswoosh.swift`, then
+Releasing is a tag push: bump `noswooshVersion` in `Sources/Version.swift`, then
 `git tag vX.Y.Z && git push origin vX.Y.Z`. CI builds, signs, notarizes, staples,
 publishes, and bumps the cask in `mmathys/homebrew-tap`. The workflow header lists the
 secrets; each group degrades to a skip when absent. Only edit the tap by hand if the
