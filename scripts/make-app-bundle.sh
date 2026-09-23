@@ -18,9 +18,9 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-VERSION=$(sed -n 's/^let noswooshVersion = "\(.*\)"$/\1/p' noswoosh.swift)
+VERSION=$(sed -n 's/^let noswooshVersion = "\(.*\)"$/\1/p' Sources/Version.swift)
 if [ -z "$VERSION" ]; then
-    echo "could not read noswooshVersion from noswoosh.swift" >&2
+    echo "could not read noswooshVersion from Sources/Version.swift" >&2
     exit 1
 fi
 
@@ -28,7 +28,7 @@ BUILD_TMP=""
 if [ -z "$BINARY" ]; then
     echo "==> Building noswoosh $VERSION"
     BUILD_TMP=$(mktemp -d)
-    swiftc noswoosh.swift -O -o "$BUILD_TMP/noswoosh" \
+    swiftc Sources/*.swift -O -o "$BUILD_TMP/noswoosh" \
         -F /System/Library/PrivateFrameworks -framework SkyLight
     BINARY="$BUILD_TMP/noswoosh"
 fi

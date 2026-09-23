@@ -1,4 +1,4 @@
-# Release pipeline: tag vX.Y.Z (matching noswooshVersion in noswoosh.swift) and push.
+# Release pipeline: tag vX.Y.Z (matching noswooshVersion in Sources/Version.swift) and push.
 # Builds the binary, assembles noswoosh.app, signs + notarizes + staples both, attaches
 # them to the GitHub Release, and bumps the cask in mmathys/homebrew-tap.
 #
@@ -26,7 +26,7 @@ jobs:
         id: version
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          src=$(sed -n 's/^let noswooshVersion = "\(.*\)"$/\1/p' noswoosh.swift)
+          src=$(sed -n 's/^let noswooshVersion = "\(.*\)"$/\1/p' Sources/Version.swift)
           if [ "$tag" != "$src" ]; then
             echo "tag $GITHUB_REF_NAME does not match noswooshVersion ($src)" >&2
             exit 1
@@ -68,7 +68,7 @@ jobs:
 
       - name: Build binary
         run: |
-          swiftc noswoosh.swift -O -o noswoosh \
+          swiftc Sources/*.swift -O -o noswoosh \
             -F /System/Library/PrivateFrameworks -framework SkyLight
 
       - name: Sign binary

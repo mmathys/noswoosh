@@ -38,7 +38,7 @@ cd noswoosh
 ./scripts/install.sh
 ```
 
-The installer compiles `noswoosh.swift` to `~/.local/bin/`, runs `noswoosh setup`, and
+The installer compiles `Sources/` to `~/.local/bin/`, runs `noswoosh setup`, and
 installs a LaunchAgent (`ax.max.noswoosh`) that logs to `~/Library/Logs/noswoosh.log`.
 Grant Accessibility to `~/.local/bin/noswoosh`.
 
@@ -218,10 +218,10 @@ shortcuts that `setup` disabled. Remove the Accessibility entry manually if you 
 ## Contributing
 
 Issues and pull requests are welcome. The whole tool is one Swift file
-([`noswoosh.swift`](noswoosh.swift)); build it with:
+(under [`Sources/`](Sources)); build it with:
 
 ```sh
-swiftc noswoosh.swift -O -o noswoosh \
+swiftc Sources/*.swift -O -o noswoosh \
     -F /System/Library/PrivateFrameworks -framework SkyLight
 ```
 
