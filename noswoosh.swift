@@ -109,7 +109,10 @@ func setCtrlArrowShortcuts(enabled: Bool) {
 // The whole of `noswoosh setup`, shared with the daemon, which runs it on every
 // launch (see the header) — so everything in here must stay idempotent.
 func applySystemSetup() {
-    setCtrlArrowShortcuts(enabled: false)
+    // Only take the combo away from macOS while we actually answer it. With the
+    // hotkey switched off in Settings, leaving the system shortcut disabled here
+    // would make Ctrl+arrow do nothing at all — worse than either state.
+    setCtrlArrowShortcuts(enabled: !hotkeyEnabled)
     // Versions 1.6.4 and earlier disabled the Dock's window-order space-follow
     // (workspaces-auto-swoosh) to suppress the empty-desktop yank. That also
     // killed Dock-icon-follow, because the Dock runs both off the same
@@ -142,6 +145,11 @@ let legacyAgentPlistPath =
 // own defaults domain, so upgrades keep it and `teardown` (below) resets it.
 let loginItemRegisteredKey = "loginItemRegistered"
 
+// Set just before we exit to pick up a fresh Accessibility grant, and consumed by
+// the process that replaces us. Without it the window the user was just looking
+// at vanishes at the moment they finish granting, which reads as a crash.
+let showSettingsAfterGrantKey = "showSettingsAfterGrant"
+
 // teardown's other half of the registration: unregister, and forget we ever
 // registered so a later `setup`/first launch registers again.
 func unregisterLoginItem() {
@@ -149,6 +157,29 @@ func unregisterLoginItem() {
     guard appBundleURL != nil, #available(macOS 13.0, *) else { return }
     try? SMAppService.mainApp.unregister()
 }
+
+// MARK: - Preferences (what the settings window edits)
+
+// Both input sources and their keys live in our own defaults domain, alongside
+// loginItemRegistered above. An absent key must read as ON: that is what every
+// version before the settings window did, and a fresh install must not come up
+// with both inputs dead.
+enum Pref {
+    static let hotkey = "hotkeyEnabled"
+    static let swipe  = "swipeEnabled"
+    static let hideMenuBarIcon = "hideMenuBarIcon"
+}
+
+func prefBool(_ key: String) -> Bool {
+    UserDefaults.standard.object(forKey: key) as? Bool ?? true
+}
+
+// Mirrored into globals because the swipe tap's callback reads its flag on the
+// event thread, where a UserDefaults lookup per event would be silly.
+var hotkeyEnabled = prefBool(Pref.hotkey)
+var swipeEnabled  = prefBool(Pref.swipe)
+// The odd one out: absent means *shown*, so it cannot use prefBool's default.
+var menuBarIconHidden = UserDefaults.standard.bool(forKey: Pref.hideMenuBarIcon)
 
 // MARK: - Private SkyLight reads (space bookkeeping only)
 
@@ -551,6 +582,11 @@ func spaceHasWindows(_ spaceID: UInt64) -> Bool {
                                           kCGNullWindowID) as? [[String: Any]] ?? []
     let ids = list.compactMap { w -> UInt32? in
         guard (w[kCGWindowLayer as String] as? Int) == 0 else { return nil }
+        // Our own Settings window doesn't count as something the user has on this
+        // desktop, and it sits on every space (see the settings window's
+        // collectionBehavior), so counting it would make every desktop look
+        // occupied and switch the guard off entirely.
+        guard (w[kCGWindowOwnerPID as String] as? pid_t) != getpid() else { return nil }
         return w[kCGWindowNumber as String] as? UInt32
     }
     guard !ids.isEmpty else { return false }
@@ -786,10 +822,65 @@ func menuBarImage() -> NSImage? {
     return image
 }
 
+// The same icon with a warning badge bitten out of its bottom-right corner, for
+// when we have no Accessibility permission and can therefore do nothing at all.
+//
+// Everything here is drawn in black-plus-alpha and the result stays a template,
+// so the menu bar tints it like any other status item and it inverts correctly
+// when the menu is open. That rules out a red badge — a non-template image would
+// have to guess the menu bar's own colours — so the badge reads as a shape: a
+// filled disc, separated from the head by a cleared ring, with the exclamation
+// mark punched back out of it.
+func badgedMenuBarImage() -> NSImage? {
+    guard let base = menuBarImage() else { return nil }
+    let badged = NSImage(size: base.size, flipped: false) { rect in
+        base.draw(in: rect)
+        guard let context = NSGraphicsContext.current else { return true }
+        let diameter: CGFloat = 9
+        let badge = NSRect(x: rect.maxX - diameter, y: rect.minY, width: diameter, height: diameter)
+
+        // A cleared ring first, so the disc never merges into the silhouette.
+        context.compositingOperation = .clear
+        NSBezierPath(ovalIn: badge.insetBy(dx: -1.2, dy: -1.2)).fill()
+
+        context.compositingOperation = .sourceOver
+        NSColor.black.setFill()
+        NSBezierPath(ovalIn: badge).fill()
+
+        // The "!" — punched out, so it shows the menu bar through the disc.
+        context.compositingOperation = .destinationOut
+        NSColor.black.setFill()
+        let stem: CGFloat = 1.5
+        let x = badge.midX - stem / 2
+        NSBezierPath(rect: NSRect(x: x, y: badge.minY + 3.4, width: stem, height: 3.1)).fill()
+        NSBezierPath(ovalIn: NSRect(x: x, y: badge.minY + 1.5, width: stem, height: stem)).fill()
+        return true
+    }
+    badged.isTemplate = true
+    return badged
+}
+
 // Quit needs a real handler, not NSApplication.terminate directly: while we run
 // under the LaunchAgent-era job (see migrateFromLaunchAgentEra), a plain exit is
 // resurrected by its KeepAlive, so Quit has to take the job down with it.
+// The one place that knows how to send someone to the Accessibility pane. The
+// system's own prompt offers the same button, but it only appears once per
+// process and people dismiss it.
+func openAccessibilitySettings() {
+    let pane = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+    if let url = URL(string: pane) { NSWorkspace.shared.open(url) }
+}
+
 final class MenuActions: NSObject {
+    @objc func settings(_ sender: Any?) { settingsWindow.show() }
+
+    @objc func grantAccessibility(_ sender: Any?) {
+        openAccessibilitySettings()
+        // Show Settings too: the CTA there is what tells them we relaunch on our
+        // own once the switch is flipped, so nothing looks broken meanwhile.
+        settingsWindow.show()
+    }
+
     @objc func quit(_ sender: Any?) {
         if launchedByLegacyAgent {
             _ = runTool("/bin/launchctl", ["bootout", "gui/\(getuid())/\(legacyAgentLabel)"])
@@ -798,6 +889,26 @@ final class MenuActions: NSObject {
     }
 }
 let menuActions = MenuActions()
+
+// Held so the permission state can be reapplied without rebuilding the menu.
+var grantMenuItem: NSMenuItem?
+
+// Everything about the status item that depends on whether we are trusted: the
+// badge, the tooltip, the extra menu item — and whether the icon may be hidden
+// at all. It may not: with no permission the menu is the only route to the grant
+// flow, so "Hide menu bar icon" is overridden until we are trusted, or a user who
+// hid the icon and then upgraded would be stranded with a dead app and no UI.
+func refreshStatusItemForPermission() {
+    let trusted = AXIsProcessTrusted()
+    statusItem?.isVisible = trusted ? !menuBarIconHidden : true
+    if let button = statusItem?.button, button.image != nil {
+        button.image = trusted ? menuBarImage() : badgedMenuBarImage()
+    }
+    statusItem?.button?.toolTip = trusted
+        ? "noswoosh \(noswooshVersion)"
+        : "noswoosh — needs Accessibility permission"
+    grantMenuItem?.isHidden = trusted
+}
 
 func installStatusItem() {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -813,8 +924,19 @@ func installStatusItem() {
     header.isEnabled = false
     menu.addItem(header)
     menu.addItem(.separator())
-    // No key equivalent: the menu is only reachable by clicking the status item,
-    // and a stray Cmd+Q here would shadow the frontmost app's own Quit.
+    let grant = NSMenuItem(title: "Grant Accessibility…",
+                           action: #selector(MenuActions.grantAccessibility(_:)), keyEquivalent: "")
+    grant.target = menuActions
+    menu.addItem(grant)
+    grantMenuItem = grant
+    // No key equivalents anywhere in here: the menu is only reachable by clicking
+    // the status item, and a stray Cmd+Q (or Cmd+,) would shadow the frontmost
+    // app's own Quit or Settings.
+    let settings = NSMenuItem(title: "Settings",
+                              action: #selector(MenuActions.settings(_:)), keyEquivalent: "")
+    settings.target = menuActions
+    menu.addItem(settings)
+    menu.addItem(.separator())
     let quit = NSMenuItem(title: "Quit",
                           action: #selector(MenuActions.quit(_:)), keyEquivalent: "")
     quit.target = menuActions
@@ -822,6 +944,384 @@ func installStatusItem() {
     item.menu = menu
     statusItem = item
 }
+
+// MARK: - Settings
+
+// Each input source is two halves that have to move together. Ctrl+arrow is our
+// Carbon hotkey *plus* the system shortcut we take the combo away from; leaving
+// one half switched without the other gives you either a dead key combo or two
+// handlers for it. The swipe is just the tap, but its two self-healing paths
+// (the tapDisabled branch and the 5s backstop) must not resurrect a tap the user
+// switched off — they check `swipeEnabled` for exactly that reason.
+//
+// apply* does the work; set* also persists. Startup calls apply*, so merely
+// launching never materialises a key the user has not touched.
+var hotKeyRefs: [EventHotKeyRef] = []
+
+func applyHotkey(_ on: Bool) {
+    setCtrlArrowShortcuts(enabled: !on)
+    guard on else {
+        hotKeyRefs.forEach { UnregisterEventHotKey($0) }
+        hotKeyRefs.removeAll()
+        return
+    }
+    guard hotKeyRefs.isEmpty else { return }   // idempotent: never double-register
+    for (id, keyCode) in [(UInt32(1), UInt32(kVK_LeftArrow)), (UInt32(2), UInt32(kVK_RightArrow))] {
+        var ref: EventHotKeyRef?
+        let hotKeyID = EventHotKeyID(signature: OSType(0x5350_5357), id: id) // 'SPSW'
+        let status = RegisterEventHotKey(keyCode, UInt32(controlKey), hotKeyID,
+                                         GetApplicationEventTarget(), 0, &ref)
+        if status == noErr, let ref {
+            hotKeyRefs.append(ref)
+        } else {
+            log("could not register Ctrl+arrow hotkey (status \(status))")
+        }
+    }
+}
+
+func setHotkeyEnabled(_ on: Bool) {
+    hotkeyEnabled = on
+    UserDefaults.standard.set(on, forKey: Pref.hotkey)
+    applyHotkey(on)
+}
+
+func applySwipe(_ on: Bool) {
+    guard let tap = swipeTap else { return }   // not created yet, or no Accessibility
+    CGEvent.tapEnable(tap: tap, enable: on)
+    if !on { resetSwipeState() }
+}
+
+func setSwipeEnabled(_ on: Bool) {
+    swipeEnabled = on
+    UserDefaults.standard.set(on, forKey: Pref.swipe)
+    applySwipe(on)
+}
+
+func loginItemIsEnabled() -> Bool {
+    guard appBundleURL != nil, #available(macOS 13.0, *) else { return false }
+    return SMAppService.mainApp.status == .enabled
+}
+
+func setLoginItemEnabled(_ on: Bool) {
+    guard appBundleURL != nil, #available(macOS 13.0, *) else { return }
+    do {
+        if on {
+            try SMAppService.mainApp.register()
+        } else {
+            try SMAppService.mainApp.unregister()
+        }
+        // Set the flag either way, including on an explicit *off*. The flag means
+        // "our one-time registration has happened", not "the login item is on" —
+        // clearing it here would make the next launch's registerLoginItem() turn
+        // the login item straight back on, fighting the switch the user just
+        // flipped. `teardown` still clears it, which is what makes a later setup
+        // register again.
+        UserDefaults.standard.set(true, forKey: loginItemRegisteredKey)
+    } catch {
+        log("could not \(on ? "register" : "unregister") login item: \(error.localizedDescription)")
+    }
+}
+
+// Hiding the status item leaves no way back in, so the reopen handler below is
+// what makes this setting safe to offer: launching the app again from Finder
+// reaches the running instance as a "reopen" and we surface Settings.
+func applyMenuBarIcon(hidden: Bool) {
+    // Not a plain isVisible assignment: while untrusted the icon stays up
+    // regardless of this preference. See refreshStatusItemForPermission.
+    refreshStatusItemForPermission()
+}
+
+func setMenuBarIconHidden(_ hidden: Bool) {
+    menuBarIconHidden = hidden
+    UserDefaults.standard.set(hidden, forKey: Pref.hideMenuBarIcon)
+    applyMenuBarIcon(hidden: hidden)
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        settingsWindow.show()
+        return true
+    }
+}
+let appDelegate = AppDelegate()
+
+// A plain AppKit window: two groups of checkboxes and a permission line. It is
+// the only UI this app has, so it stays a window rather than a scene — no
+// SwiftUI, nothing to load, and it costs nothing until the user opens it.
+//
+// Checkboxes, not switches: the HIG asks for a checkbox to present a single
+// setting that can be on or off, and reserves the switch's heavier weight for
+// controls that govern more than one thing ("in general, don't replace a
+// checkbox with a switch").
+final class SettingsWindow: NSObject, NSWindowDelegate {
+    // Fixed width: the content is short enough that sizing to the longest label
+    // makes the window jump around as its own copy changes, and a settings window
+    // has no resize control to correct it with.
+    private static let width: CGFloat = 440
+    private static let inset: CGFloat = 20
+    private var textWidth: CGFloat { Self.width - Self.inset * 2 }
+
+    private var window: NSWindow?
+    // lazy throughout: this instance is a global, so eager properties would build
+    // AppKit controls during top-level initialisation — before NSApplication.shared
+    // exists. Nothing here is constructed until the user opens the window.
+    private lazy var loginCheckbox = NSButton(checkboxWithTitle: "Launch on login",
+                                              target: nil, action: nil)
+    private lazy var hideIconCheckbox = NSButton(checkboxWithTitle: "Hide menu bar icon",
+                                                 target: nil, action: nil)
+    private lazy var hotkeyCheckbox = NSButton(checkboxWithTitle: "Ctrl + ← / → switches spaces",
+                                               target: nil, action: nil)
+    private lazy var swipeCheckbox = NSButton(checkboxWithTitle: "Three-finger swipe switches spaces",
+                                              target: nil, action: nil)
+    private lazy var grantTitle = NSTextField(labelWithString: "Accessibility permission needed")
+    private lazy var grantDetail = NSTextField(labelWithString: "")
+    private lazy var grantButton = NSButton(title: "Grant Accessibility…",
+                                            target: nil, action: nil)
+    private var grantBox: NSStackView?
+    private var content: NSStackView?
+    private var permissionTimer: Timer?
+    private var wasTrusted = false
+
+    func show() {
+        let window = self.window ?? build()
+        self.window = window
+        refresh()
+        // .accessory apps are never frontmost on their own, so without this the
+        // window opens behind whatever the user was looking at.
+        NSApp.activate(ignoringOtherApps: true)
+        if !window.isVisible { window.center() }
+        window.makeKeyAndOrderFront(nil)
+        // Accessibility can be granted while this is open. Poll so the line stops
+        // lying, and only while the window is actually up.
+        permissionTimer?.invalidate()
+        permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.refreshPermission()
+        }
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        permissionTimer?.invalidate()
+        permissionTimer = nil
+    }
+
+    var isOpen: Bool { window?.isVisible ?? false }
+
+    // MARK: building blocks
+
+    private func label(_ text: String, secondary: Bool = false) -> NSTextField {
+        let field = NSTextField(labelWithString: text)
+        if secondary {
+            field.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            field.textColor = .secondaryLabelColor
+        }
+        // Descriptions wrap rather than widening the window.
+        field.lineBreakMode = .byWordWrapping
+        field.maximumNumberOfLines = 0
+        field.preferredMaxLayoutWidth = textWidth
+        return field
+    }
+
+    // Eats the slack in a row so whatever follows it sits against the right edge.
+    private func spacer() -> NSView {
+        let view = NSView()
+        view.setContentHuggingPriority(.init(1), for: .horizontal)
+        view.setContentCompressionResistancePriority(.init(1), for: .horizontal)
+        return view
+    }
+
+    private func hstack(_ views: [NSView]) -> NSStackView {
+        let stack = NSStackView(views: views)
+        stack.orientation = .horizontal
+        stack.spacing = 8
+        return stack
+    }
+
+    private func vstack(_ views: [NSView], spacing: CGFloat) -> NSStackView {
+        let stack = NSStackView(views: views)
+        stack.orientation = .vertical
+        // .leading, deliberately. NSStackView's .width alignment does not stretch a
+        // child that is narrower than the stack — it aligns it to the trailing
+        // edge, which right-aligned every single-line description. Rows that need
+        // the whole width (a trailing version or button, a separator) get an
+        // explicit width constraint via fullWidth() instead.
+        stack.alignment = .leading
+        stack.spacing = spacing
+        return stack
+    }
+
+    // Pin a row to the text column so its trailing item lands on the right edge.
+    private func fullWidth(_ view: NSView) -> NSView {
+        view.widthAnchor.constraint(equalToConstant: textWidth).isActive = true
+        return view
+    }
+
+    private func checkbox(_ button: NSButton, _ action: Selector) -> NSButton {
+        button.target = self
+        button.action = action
+        return button
+    }
+
+    private func separator() -> NSBox {
+        let box = NSBox()
+        box.boxType = .separator
+        return box
+    }
+
+    private func build() -> NSWindow {
+        // Group 1: the app itself. The version rides on the first row's right edge
+        // rather than taking a footer of its own.
+        loginCheckbox.target = self
+        loginCheckbox.action = #selector(toggleLogin(_:))
+        let version = label("v\(noswooshVersion)", secondary: true)
+        let general = vstack([
+            fullWidth(hstack([loginCheckbox, spacer(), version])),
+            checkbox(hideIconCheckbox, #selector(toggleHideIcon(_:))),
+            label("When the menu bar icon is hidden, relaunch noswoosh from Finder to open settings.",
+                  secondary: true),
+        ], spacing: 6)
+
+        // Group 2: the two ways to actually switch a space.
+        let inputs = vstack([
+            checkbox(hotkeyCheckbox, #selector(toggleHotkey(_:))),
+            label("Off returns the shortcut to macOS, animation and all.", secondary: true),
+            checkbox(swipeCheckbox, #selector(toggleSwipe(_:))),
+        ], spacing: 6)
+
+        // The call to action, first in the window and hidden once we are trusted.
+        // Everything below it is switched off meanwhile, because none of it can
+        // take effect without the permission — a live-looking checkbox that
+        // silently does nothing is worse than a disabled one.
+        grantTitle.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
+        grantDetail.stringValue = """
+            noswoosh can't switch spaces until you allow it under Privacy & \
+            Security › Accessibility. It picks the permission up on its own once \
+            you do — no restart needed.
+            """
+        grantDetail.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        grantDetail.textColor = .secondaryLabelColor
+        grantDetail.lineBreakMode = .byWordWrapping
+        grantDetail.maximumNumberOfLines = 0
+        grantDetail.preferredMaxLayoutWidth = textWidth
+        grantButton.target = self
+        grantButton.action = #selector(openAccessibilityPane(_:))
+        grantButton.bezelStyle = .rounded
+        grantButton.keyEquivalent = "\r"          // default button styling
+        let grantBox = vstack([
+            grantTitle,
+            grantDetail,
+            grantButton,
+        ], spacing: 8)
+        self.grantBox = grantBox
+
+        let content = vstack([
+            grantBox,
+            separator(),
+            general,
+            separator(),
+            inputs,
+        ], spacing: 16)
+        self.content = content
+        content.alignment = .leading
+        // .width alignment equalises the groups against each other, not against
+        // the window, so a narrower group ends up centred — which indented the
+        // second group 39pt past the first. Pin every group to the text column
+        // instead, and each group's own .width alignment carries that down to its
+        // rows so trailing items land on the same right edge.
+        for group in content.arrangedSubviews {
+            group.widthAnchor.constraint(equalToConstant: textWidth).isActive = true
+        }
+        content.edgeInsets = NSEdgeInsets(top: Self.inset, left: Self.inset,
+                                          bottom: Self.inset, right: Self.inset)
+
+        let window = NSWindow(contentRect: .zero,
+                              styleMask: [.titled, .closable],
+                              backing: .buffered, defer: false)
+        window.title = "noswoosh Settings"
+        window.contentView = content
+        window.delegate = self
+        // This window is what makes the empty-desktop yank guard dangerous. The
+        // guard takes activation when we land on a windowless space, and its whole
+        // premise (see installYankGuard) is that we have no off-space window to
+        // order in — true until Settings existed. With the window open on another
+        // space, activating ordered it in there and the Dock followed us to it:
+        // bug #15, reintroduced by our own UI. Measured 1/4 switches yanked with
+        // the window open, 0/6 with it closed.
+        //
+        // .canJoinAllSpaces, not .moveToActiveSpace. Moving races the follow rule
+        // (still 2/8) and drags the window onto whatever desktop you land on,
+        // which also makes that desktop non-empty. Joining every space means the
+        // window is already on the space we land on, so ordering it in never
+        // crosses a space boundary and the rule has nothing to chase.
+        //
+        // The other half of this is in spaceHasWindows, which must ignore our own
+        // windows — otherwise a window on every space makes every space look
+        // occupied and the guard stops firing at all.
+        window.collectionBehavior.insert(.canJoinAllSpaces)
+        // Float above ordinary windows while open. This is a menu bar app: you
+        // reached this window from the status item, usually on top of whatever you
+        // were working in, and having it fall behind that app is how you lose it.
+        // Note the side effect on the yank guard — a floating window is no longer
+        // layer 0, so spaceHasWindows would stop seeing it even without the
+        // pid check there. The pid check stays anyway: it is what keeps this
+        // correct if the level ever goes back to .normal.
+        window.level = .floating
+        // No resize control, so settle the constraints and take the height once.
+        content.layoutSubtreeIfNeeded()
+        window.setContentSize(content.fittingSize)
+        window.isReleasedWhenClosed = false   // this instance is reused
+        return window
+    }
+
+    // MARK: state
+
+    private func refresh() {
+        loginCheckbox.state = loginItemIsEnabled() ? .on : .off
+        hideIconCheckbox.state = menuBarIconHidden ? .on : .off
+        hotkeyCheckbox.state = hotkeyEnabled ? .on : .off
+        swipeCheckbox.state = swipeEnabled ? .on : .off
+        refreshPermission()
+    }
+
+    private func refreshPermission() {
+        let trusted = AXIsProcessTrusted()
+        for control in [loginCheckbox, hideIconCheckbox, hotkeyCheckbox, swipeCheckbox] {
+            control.isEnabled = trusted
+        }
+        // A bare binary has no bundle identity to register, so this row would be a
+        // checkbox that cannot do anything even once we are trusted.
+        if trusted { loginCheckbox.isEnabled = appBundleURL != nil }
+
+        grantBox?.isHidden = trusted
+        // A hidden arranged subview collapses out of the stack, so the window has
+        // to be resized to match or it keeps the taller frame.
+        if trusted != wasTrusted, let content, let window {
+            content.layoutSubtreeIfNeeded()
+            window.setContentSize(content.fittingSize)
+        }
+        wasTrusted = trusted
+    }
+
+    @objc private func toggleHotkey(_ sender: NSButton) { setHotkeyEnabled(sender.state == .on) }
+    @objc private func toggleSwipe(_ sender: NSButton) { setSwipeEnabled(sender.state == .on) }
+    @objc private func toggleHideIcon(_ sender: NSButton) { setMenuBarIconHidden(sender.state == .on) }
+
+    @objc private func toggleLogin(_ sender: NSButton) {
+        setLoginItemEnabled(sender.state == .on)
+        // SMAppService can land on "requires approval" rather than the state we
+        // asked for, so show what actually happened, not what was clicked.
+        sender.state = loginItemIsEnabled() ? .on : .off
+    }
+
+    @objc private func openAccessibilityPane(_ sender: Any?) {
+        openAccessibilitySettings()
+    }
+}
+
+let settingsWindow = SettingsWindow()
+
+// Free function so the Accessibility poll, which is declared above the window in
+// the file, can ask without reaching through the class.
+var settingsWindowIsOpen: Bool { settingsWindow.isOpen }
 
 // Accessibility trust is evaluated when the process starts and cached for its
 // lifetime, so a grant made while we are running does not take effect. Rather
@@ -834,40 +1334,47 @@ func installStatusItem() {
 let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
 if !AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary) {
     log("waiting for Accessibility permission (System Settings > Privacy & Security > Accessibility)")
-    var secondsWaited = 0
-    var openedSettings = false
     Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-        if AXIsProcessTrusted() {
-            if launchedByLegacyAgent || (appBundleURL == nil && getppid() == 1) {
-                log("Accessibility granted — restarting to apply it")
-            } else if let bundle = appBundleURL {
-                log("Accessibility granted — relaunching to apply it")
-                _ = runTool("/usr/bin/open", ["-n", bundle.path])
-            } else {
-                log("Accessibility granted — restart noswoosh to apply it")
-            }
-            exit(0)
+        guard AXIsProcessTrusted() else { return }
+        // Carry the open window across the relaunch.
+        if settingsWindowIsOpen {
+            UserDefaults.standard.set(true, forKey: showSettingsAfterGrantKey)
         }
-        secondsWaited += 1
-        // The system prompt above already offers an "Open System Settings" button.
-        // Give it a chance; if it was dismissed we are a background agent with no
-        // UI, and the only remaining signal is a log file nobody opens — so take
-        // the user to the pane directly, once.
-        if secondsWaited == 15, !openedSettings {
-            openedSettings = true
-            let pane = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-            if let url = URL(string: pane), NSWorkspace.shared.open(url) {
-                log("opened System Settings > Privacy & Security > Accessibility")
-            }
+        if launchedByLegacyAgent || (appBundleURL == nil && getppid() == 1) {
+            log("Accessibility granted — restarting to apply it")
+        } else if let bundle = appBundleURL {
+            log("Accessibility granted — relaunching to apply it")
+            _ = runTool("/usr/bin/open", ["-n", bundle.path])
+        } else {
+            log("Accessibility granted — restart noswoosh to apply it")
         }
+        exit(0)
     }
+    // Versions before the settings window opened the Accessibility pane by itself
+    // after 15s, because a background agent with no UI had no other way to say
+    // anything. There is a window with a Grant button now, and opening System
+    // Settings over whatever the user is doing is rude once they have been asked
+    // properly — so that timer is gone rather than duplicated.
 }
 
 let app = NSApplication.shared
 // .accessory, not .prohibited: no Dock icon and no Cmd-Tab entry either way, but
 // a prohibited app cannot become active, which the yank guard depends on.
 app.setActivationPolicy(.accessory)
+app.delegate = appDelegate
 installStatusItem()
+applyMenuBarIcon(hidden: menuBarIconHidden)
+
+// Open Settings unprompted in exactly two cases: we cannot work because the
+// permission is missing, or we have just relaunched because it was granted. A
+// Homebrew install cannot grant Accessibility for you (the install steps are
+// sandboxed — #13), so for most people the first launch *is* the untrusted case
+// and this window is the only thing that tells them so.
+if !AXIsProcessTrusted() || UserDefaults.standard.bool(forKey: showSettingsAfterGrantKey) {
+    UserDefaults.standard.removeObject(forKey: showSettingsAfterGrantKey)
+    // After the run loop starts: activation needs it.
+    DispatchQueue.main.async { settingsWindow.show() }
+}
 if yankGuardNeeded {
     installYankGuard()
 } else {
@@ -886,15 +1393,8 @@ InstallEventHandler(GetApplicationEventTarget(), { _, event, _ -> OSStatus in
     return noErr
 }, 1, &eventType, nil, nil)
 
-for (id, keyCode) in [(UInt32(1), UInt32(kVK_LeftArrow)), (UInt32(2), UInt32(kVK_RightArrow))] {
-    var ref: EventHotKeyRef?
-    let hotKeyID = EventHotKeyID(signature: OSType(0x5350_5357), id: id) // 'SPSW'
-    let status = RegisterEventHotKey(keyCode, UInt32(controlKey), hotKeyID,
-                                     GetApplicationEventTarget(), 0, &ref)
-    if status != noErr {
-        log("could not register Ctrl+arrow hotkey (status \(status))")
-    }
-}
+// Registration itself lives in applyHotkey so Settings can take it back out.
+applyHotkey(hotkeyEnabled)
 
 // Input source 2: intercept real 3-finger horizontal swipes and replace them
 // with the instant switch. Direction is read from progress (Changed) or, for
@@ -911,7 +1411,9 @@ let swipeCallback: CGEventTapCallBack = { _, type, ev, _ in
 
     if type == .tapDisabledByUserInput || type == .tapDisabledByTimeout {
         resetSwipeState()
-        if AXIsProcessTrusted(), let t = swipeTap { CGEvent.tapEnable(tap: t, enable: true) }
+        if swipeEnabled, AXIsProcessTrusted(), let t = swipeTap {
+            CGEvent.tapEnable(tap: t, enable: true)
+        }
         return pass
     }
 
@@ -975,12 +1477,14 @@ if let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventT
     swipeTap = tap
     let src = CFMachPortCreateRunLoopSource(nil, tap, 0)
     CFRunLoopAddSource(CFRunLoopGetCurrent(), src, .commonModes)
-    CGEvent.tapEnable(tap: tap, enable: true)
+    // Created either way, enabled only if the user wants swipes: a tap that
+    // exists but is disabled costs nothing and lets Settings flip it live.
+    CGEvent.tapEnable(tap: tap, enable: swipeEnabled)
     // The callback re-enables the tap when the system disables it, but a disable
     // can arrive without a callback under load. Poll as a backstop so swipes never
     // silently die until the next relaunch.
     Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in
-        if AXIsProcessTrusted(), !CGEvent.tapIsEnabled(tap: tap) {
+        if swipeEnabled, AXIsProcessTrusted(), !CGEvent.tapIsEnabled(tap: tap) {
             CGEvent.tapEnable(tap: tap, enable: true)
             log("re-enabled swipe event tap")
         }
