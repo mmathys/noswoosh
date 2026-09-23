@@ -1078,6 +1078,9 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     private lazy var grantButton = NSButton(title: "Grant Accessibility…",
                                             target: nil, action: nil)
     private var grantBox: NSStackView?
+    // Hidden with the CTA. Collapsing only the box leaves its separator behind as
+    // a stray rule across the top of the window.
+    private var grantSeparator: NSBox?
     private var content: NSStackView?
     private var permissionTimer: Timer?
     private var wasTrusted = false
@@ -1213,9 +1216,12 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         ], spacing: 8)
         self.grantBox = grantBox
 
+        let grantSeparator = separator()
+        self.grantSeparator = grantSeparator
+
         let content = vstack([
             grantBox,
-            separator(),
+            grantSeparator,
             general,
             separator(),
             inputs,
@@ -1292,6 +1298,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         if trusted { loginCheckbox.isEnabled = appBundleURL != nil }
 
         grantBox?.isHidden = trusted
+        grantSeparator?.isHidden = trusted
         // A hidden arranged subview collapses out of the stack, so the window has
         // to be resized to match or it keeps the taller frame.
         if trusted != wasTrusted, let content, let window {
