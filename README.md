@@ -202,9 +202,10 @@ based on most recent use" in System Settings → Desktop & Dock.
 - **Apple Silicon quirk.** The reference implementations use `FLT_TRUE_MIN` as the
   gesture progress; that subnormal float is flushed to zero (sign lost) somewhere in the
   event pipeline on Apple Silicon, making every switch go the same direction. This port
-  uses `1e-4`, which survives and is still visually zero. Both OS paths use it — the
-  macOS 27 path used full travel (`±1.0`) through 1.7.0, which switched correctly but
-  visibly slid; 1.7.1 made it near-zero there too.
+  uses `1e-4`, which survives and is still visually zero, on the macOS 26 path. The
+  macOS 27 path uses `±0.1`. Near-zero progress there (1.7.1–1.7.6) left the
+  destination space black on macOS 27.0.1, often until Mission Control was opened
+  (issue #15). At `0.1` the switch still completes in a single frame.
 
 ## Uninstall
 

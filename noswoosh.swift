@@ -45,7 +45,7 @@ import ApplicationServices
 // Build: swiftc noswoosh.swift -O -o noswoosh \
 //          -F /System/Library/PrivateFrameworks -framework SkyLight
 
-let noswooshVersion = "1.7.6"
+let noswooshVersion = "1.7.7"
 
 // MARK: - Setup / teardown (system configuration, all user-level)
 
@@ -357,15 +357,38 @@ func makeAugmentedDockEvent(_ phase: GesturePhase, right: Bool) -> CGEvent? {
     ev.setIntegerValueField(fieldCGSEventType, value: kCGSEventDockControl)
     ev.setIntegerValueField(fieldGestureHIDType, value: kIOHIDEventTypeDockSwipe)
     ev.setIntegerValueField(fieldGesturePhase, value: phase.rawValue)
-    // Near-zero progress, same as the pre-27 path and for the same reason: it
-    // commits the switch with nothing left to animate. This path used full travel
-    // (±1.0) through 1.7.0, which visibly slid on 27 — the switch was correct but
-    // not instant, defeating the point. The ±9999 fling on .ended is what commits
-    // it, so the magnitude here can be ~0 without losing the switch; only the sign
-    // matters. Not FLT_TRUE_MIN (flushes to zero on Apple Silicon, losing the sign)
-    // and not 0 either — `fixed1616` would serialize it as 0 in the IOHID payload.
+    // Small but NOT near-zero progress. The ±9999 fling on .ended is what commits
+    // the switch and finishes it in a single frame, so the magnitude here does not
+    // decide whether the switch animates — it decides whether it lands *drawn*.
+    //
+    // 1.7.1–1.7.6 used 1e-4 (same as the pre-27 path) and on 27.0.1 (26A434) that
+    // lands black: the Dock raises its transition snapshots, commits, and tears them
+    // down within ~37ms with nothing having moved, and WindowServer then sometimes
+    // never composites the destination space — not even its wallpaper. It sticks
+    // through further switches until something forces a full redraw (Mission
+    // Control). Same zero-travel race as issue #1 on 26.0–26.5 and the blank menu
+    // bar in #9 on 27.0, now taking the whole space. Measured on a single 2560x1440
+    // display, six spaces, Ctrl+arrow via osascript, black = settled frame luma < 8:
+    //
+    //   progress   black landings          transition (60fps capture)
+    //   1e-4       8/20, 13/20, 3/10       0ms
+    //   0.001      7/20                    —
+    //   0.01       3/20                    —
+    //   0.02       3/20                    —
+    //   0.03       0/40                    ≤1 frame
+    //   0.05       0/20, 0/40              ≤1 frame
+    //   0.1        0/40, 0/20, 0/30 rapid  1 frame (~17ms)
+    //   1.0        0/20, 0/20              1 frame
+    //   native     0/20                    ~437ms slide, ~27 frames
+    //
+    // 0.1 sits ~5x above the last failing value and still cuts in one frame. Raise
+    // it if the black comes back; lowering it toward 0 is what broke it. Verify
+    // with scripts/landing-check.swift, which catches both a black landing and a
+    // slide — an "it switched" check catches neither. Not 0 either way: `fixed1616`
+    // would serialize it as 0 in the IOHID payload. The pre-27 path keeps 1e-4;
+    // this race was not seen there on 26.6.
     // On the 27 path direction is inverted: rightward = negative progress.
-    ev.setDoubleValueField(fieldSwipeProgress, value: (right ? -1e-4 : 1e-4) * postedSwipeSign)
+    ev.setDoubleValueField(fieldSwipeProgress, value: (right ? -0.1 : 0.1) * postedSwipeSign)
     ev.setIntegerValueField(fieldSwipeMotion, value: kCGGestureMotionHorizontal)
     ev.setDoubleValueField(fieldSwipePositionX, value: 0.1)
     // A strong "fling" velocity on the terminal phase is what commits the switch.

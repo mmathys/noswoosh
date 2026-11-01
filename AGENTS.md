@@ -32,15 +32,21 @@ cask bump in `mmathys/homebrew-tap` — never clone or push that repo by hand.
 
 ## Traps
 
-**Don't tidy the private-API constants.** The numeric `CGEventField`s and the `1e-4`
-gesture progress are load-bearing and hard-won. `FLT_TRUE_MIN` — what the reference
-implementations use — is flushed to zero on Apple Silicon and breaks direction. Both
-paths use `1e-4` as of 1.7.1: the 27 path shipped `±1.0` (full travel) through 1.7.0,
-which switched correctly and so passed every functional test, but *visibly slid* —
-instant switching is the whole point, and no assertion in this repo catches a switch
-that works but animates. The ±9999 fling on `.ended` is what commits the 27 swipe, so
-only the sign of progress matters; don't use `0`, which `fixed1616` serializes as 0 in
-the IOHID payload. Verify by eye on a real 27, not just by checking that it switched.
+**Don't tidy the private-API constants.** The numeric `CGEventField`s and the gesture
+progress values are load-bearing and hard-won. `FLT_TRUE_MIN` — what the reference
+implementations use — is flushed to zero on Apple Silicon and breaks direction. The
+pre-27 path uses `1e-4`. The 27 path has gone back and forth: `±1.0` through 1.7.0
+(reported to slide by eye on 27.0), `1e-4` from 1.7.1 to 1.7.6, and `±0.1` since. On
+27.0.1 near-zero progress **lands black**: WindowServer sometimes never composites the
+destination space, and it stays black through later switches until Mission Control
+redraws it. That was 8–13 of every 20 switches at `1e-4`, 3/20 still at 0.02, and 0 in
+over 100 at 0.03–1.0. On 27.0.1 every value from 0.03 to 1.0 cuts in one frame, because
+the ±9999 fling on `.ended` finishes the transition. So magnitude doesn't decide whether
+the switch animates, only whether it lands drawn. Don't use `0` either: `fixed1616`
+serializes it as 0 in the IOHID payload. The measured table is at
+`makeAugmentedDockEvent`. A switch can land black, or land but slide, and an "it
+switched" assertion catches neither. Run `scripts/landing-check.swift`, which films the
+display at 60fps and reports both.
 
 **The macOS 27 IOHID payload is byte-exact.** `generateIOHIDPayload` writes packed
 little-endian structs (28/40/28-byte records) whose sizes and field offsets the Dock
