@@ -10,6 +10,7 @@ import ApplicationServices
 //   noswoosh teardown   undo the system config
 //   noswoosh left       switch one space left and exit
 //   noswoosh right      switch one space right and exit
+//   noswoosh 1 … 9      switch to that space on the pointer's display and exit
 //   noswoosh list       print current space / count
 //   noswoosh version    print version
 //
@@ -49,10 +50,15 @@ let noswooshVersion = "1.7.7"
 
 // MARK: - Setup / teardown (system configuration, all user-level)
 
-func runTool(_ path: String, _ arguments: [String]) -> Bool {
+// `quiet` drops the tool's own output; probes need only the exit status.
+func runTool(_ path: String, _ arguments: [String], quiet: Bool = false) -> Bool {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: path)
     process.arguments = arguments
+    if quiet {
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+    }
     do {
         try process.run()
         process.waitUntilExit()
@@ -83,7 +89,7 @@ func setCtrlArrowShortcuts(enabled: Bool) {
     }
 }
 
-// MARK: - Private SkyLight reads (space bookkeeping only)
+// MARK: - Private SkyLight (space bookkeeping)
 
 typealias CGSConnectionID = UInt32
 
@@ -100,6 +106,13 @@ func SLSGetActiveSpace(_ cid: CGSConnectionID) -> UInt64
 @_silgen_name("SLSCopySpacesForWindows")
 func SLSCopySpacesForWindows(_ cid: CGSConnectionID, _ mask: Int32,
                              _ windows: CFArray) -> Unmanaged<CFArray>
+
+// Sets a display's current space outright, with no gesture and no transition
+// through the spaces in between. Returns 0 on success.
+@_silgen_name("SLSManagedDisplaySetCurrentSpace")
+func SLSManagedDisplaySetCurrentSpace(_ cid: CGSConnectionID,
+                                     _ display: CFString,
+                                     _ space: UInt64) -> Int32
 
 let cid = SLSMainConnectionID()
 
@@ -461,9 +474,104 @@ func switchSpace(right: Bool) {
     // (on macOS 27 this also spares the Dock a swipe it would only reject).
     guard target >= 0, target < info.ids.count else { return }
     postSwitchGesture(right: right)
-    predictedIndex = target
-    predictedDisplay = info.display
+    recordPrediction(target, display: info.display)
+}
+
+func recordPrediction(_ index: Int, display: String?) {
+    predictedIndex = index
+    predictedDisplay = display
     predictionTime = Date()
+}
+
+// One step toward `index` from the real space list, not the prediction: the walker
+// waits for each commit, so a stale prediction would send the step the wrong way.
+func postStep(toward index: Int) -> Bool {
+    guard let info = spaceInfo() else { return false }
+    guard index != info.currentIndex else { return true }
+    let right = index > info.currentIndex
+    let step = info.currentIndex + (right ? 1 : -1)
+    guard step >= 0, step < info.ids.count else { return false }
+    postSwitchGesture(right: right)
+    recordPrediction(step, display: info.display)
+    return true
+}
+
+// MARK: - Absolute switching (`noswoosh 1` … `noswoosh 9`)
+
+// A numbered jump sets the display's space directly. Posting swipes cannot do
+// this: the Dock only accepts a one-space gesture, so a 6 → 1 jump would
+// composite every desktop in between. The direct call is one transition.
+//
+// If the display refuses the target, fall back to walking one space at a time.
+// The direct path posts no events, so only the fallback needs Accessibility.
+func switchToSpace(_ number: Int) -> Bool {
+    guard let info = spaceInfo() else { return false }
+    let target = number - 1
+    guard target >= 0, target < info.ids.count else { return false }
+    if info.currentIndex == target { return true }
+
+    if let display = info.display {
+        let rc = SLSManagedDisplaySetCurrentSpace(cid, display as CFString,
+                                                  info.ids[target])
+        if rc == 0 { return waitForSpace(target, on: display) }
+    }
+    return walkToSpace(number)
+}
+
+// The list normally updates with the call; poll briefly instead of trusting rc alone.
+func waitForSpace(_ target: Int, on display: String) -> Bool {
+    let deadline = Date().addingTimeInterval(0.6)
+    while Date() < deadline {
+        if let now = spaceInfo(), now.display == display, now.currentIndex == target {
+            return true
+        }
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+    }
+    return false
+}
+
+// Fallback: step one space at a time. The distance is not `number - 1` because
+// the list includes fullscreen spaces, and re-reading each round also absorbs
+// "rearrange Spaces by most recent use" reordering. Each step waits for the real
+// list to confirm the commit — a rejected swipe is dropped silently on macOS 27,
+// so posting the whole distance blind would aim the rest at the wrong space.
+func walkToSpace(_ number: Int) -> Bool {
+    guard let first = spaceInfo() else { return false }
+    let target = number - 1
+    guard target >= 0, target < first.ids.count else { return false }
+
+    // At most one swipe per space exists, so this cannot spin if the list stalls.
+    var stepsLeft = max(1, first.ids.count)
+    while stepsLeft > 0 {
+        guard let info = spaceInfo() else { return false }
+        guard target < info.ids.count else { return false }  // list shrank under us
+        if info.currentIndex == target { return true }
+        let before = info.currentIndex
+        guard postStep(toward: target) else { return false }
+        stepsLeft -= 1
+        // If the space arrived between the walker's read and postStep's, nothing
+        // was posted, so waiting for a change here would time out.
+        if spaceInfo()?.currentIndex == target { return true }
+        guard waitForCommit(from: before, on: info.display) else { return false }
+    }
+    return spaceInfo()?.currentIndex == target
+}
+
+// Our zero-travel switch commits in one frame, but the space list can lag it
+// (more on 27). Timing out returns false so a broken path fails loudly instead
+// of firing the remaining steps blind.
+let commitTimeout: TimeInterval = needsAugmentation ? 0.6 : 0.4
+
+func waitForCommit(from before: Int, on display: String?) -> Bool {
+    let deadline = Date().addingTimeInterval(commitTimeout)
+    while Date() < deadline {
+        if let info = spaceInfo(), info.display == display, info.currentIndex != before {
+            return true
+        }
+        // Pump the run loop so the posted events flush while we wait.
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
+    }
+    return false
 }
 
 // MARK: - Empty-desktop yank guard
@@ -583,6 +691,22 @@ func isRightSwipe(_ direction: Double) -> Bool {
 
 let args = CommandLine.arguments
 if args.count > 1 {
+    // Absolute switch: `noswoosh 3` goes to the third space on the pointer's
+    // display, one-based like `list` and Mission Control.
+    if let number = Int(args[1]), (1...9).contains(number) {
+        if let info = spaceInfo(), number > info.ids.count {
+            FileHandle.standardError.write(
+                "noswoosh: no space \(number) (display has \(info.ids.count))\n"
+                    .data(using: .utf8)!)
+            exit(1)
+        }
+        guard switchToSpace(number) else {
+            FileHandle.standardError.write(
+                "noswoosh: could not switch to space \(number)\n".data(using: .utf8)!)
+            exit(1)
+        }
+        exit(0)
+    }
     switch args[1] {
     case "list":
         if let info = spaceInfo() {
@@ -603,8 +727,12 @@ if args.count > 1 {
         // leave the pref at the macOS default. Clear an override a prior version
         // left — restarting the Dock only if we actually removed one, so a fresh
         // install gets no gratuitous restart.
-        if runTool("/usr/bin/defaults", ["delete", "com.apple.dock", "workspaces-auto-swoosh"]) {
-            _ = runTool("/usr/bin/killall", ["Dock"])
+        //
+        // Probe first: `defaults delete` prints "Could not find key" when there
+        // is nothing to clear, which makes a fresh `setup` look broken.
+        if runTool("/usr/bin/defaults", ["read", "com.apple.dock", "workspaces-auto-swoosh"], quiet: true),
+           runTool("/usr/bin/defaults", ["delete", "com.apple.dock", "workspaces-auto-swoosh"], quiet: true) {
+            _ = runTool("/usr/bin/killall", ["Dock"], quiet: true)
         }
         print("""
         noswoosh setup complete:
@@ -621,7 +749,7 @@ if args.count > 1 {
         print("noswoosh \(noswooshVersion)")
         exit(0)
     default:
-        FileHandle.standardError.write("usage: noswoosh [left | right | list | setup | teardown | version]\n".data(using: .utf8)!)
+        FileHandle.standardError.write("usage: noswoosh [left | right | 1-9 | list | setup | teardown | version]\n".data(using: .utf8)!)
         exit(1)
     }
 }

@@ -14,6 +14,12 @@ serialized IOHID payload. Keep new work behind that gate so a change to one OS c
 regress the other. Verified on macOS 26 and 27 only — don't claim older releases the
 pre-27 path *should* handle but nobody has tested.
 
+A third source, the numbered CLI (`noswoosh 1`–`9`), sets an absolute space with
+`SLSManagedDisplaySetCurrentSpace`, so the desktops between are never composited.
+It falls back to the `postStep(toward:)` walker if the display refuses the target.
+The direct path posts no events but still fires `activeSpaceDidChangeNotification`,
+so the yank guard covers it.
+
 ## Build and release
 
 ```sh
