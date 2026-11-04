@@ -68,21 +68,28 @@ A CLI is available for scripting and debugging:
 noswoosh list      # "space 2 of 4"
 noswoosh right     # switch once and exit
 noswoosh left
+noswoosh 1 … 9     # jump straight to that space
 noswoosh setup     # apply system config (teardown reverses it)
 noswoosh teardown
 noswoosh version
 ```
 
-For a custom shortcut, bind `noswoosh left` / `noswoosh right` in any hotkey tool that
-runs a command — [skhd](https://github.com/koekeishiya/skhd),
+`noswoosh 1` … `noswoosh 9` take a one-based space number matching `list` and
+Mission Control (fullscreen spaces included). The jump targets the display under the
+pointer and sets it directly, so space 6 → space 1 is one transition and the desktops
+in between are never drawn; if the display refuses the target it falls back to
+stepping. A number past the last space does nothing and exits non-zero.
+
+For a custom shortcut, bind `noswoosh left` / `noswoosh right` / `noswoosh N` in any
+hotkey tool that runs a command — [skhd](https://github.com/koekeishiya/skhd),
 [Karabiner-Elements](https://karabiner-elements.pqrs.org),
-[Hammerspoon](https://www.hammerspoon.org) or [Raycast](https://www.raycast.com). The
-switch lands in ~100ms either way, so there's no speed penalty versus the built-in
-Ctrl+←/→.
+[Hammerspoon](https://www.hammerspoon.org) or [Raycast](https://www.raycast.com). A
+one-space switch lands in ~100ms either way, so there's no speed penalty versus the
+built-in Ctrl+←/→, and a numbered jump is a single transition too.
 
 ## How it works
 
-macOS has no supported way to disable *only* the space-switch slide animation:
+macOS has no supported way to disable _only_ the space-switch slide animation:
 
 - The old `defaults write com.apple.dock workspaces-swoosh-animation-off` died with
   Lion (2011).
@@ -111,7 +118,7 @@ switching. noswoosh detects the running OS and, on 27, attaches that payload (la
 reverse-engineered from [joshuarli/iss](https://github.com/joshuarli/iss)); on 26 it
 uses the original lightweight path unchanged.
 
-> The name: *swoosh* is Apple's own word for the space-slide animation, from the
+> The name: _swoosh_ is Apple's own word for the space-slide animation, from the
 > long-dead Snow Leopard setting `workspaces-swoosh-animation-off`. This is that
 > setting, resurrected.
 
@@ -125,16 +132,16 @@ app activations:
 1. Landing on a space with no windows, macOS picks some other app and activates it.
 2. That app orders its key window in — and that window lives on another space.
 3. The Dock's window-order follow rule fires (`switching to space N for window(...)
-   ordered on non-visible space`) and you're yanked to wherever that window lives.
+ordered on non-visible space`) and you're yanked to wherever that window lives.
 
 The tempting fix is `defaults write com.apple.dock workspaces-auto-swoosh -bool NO`,
 which stops the Dock registering for that notification at all. noswoosh shipped that
 through 1.6.4 — and it costs you **Dock-icon-follow**, clicking a Dock icon to jump to
 the space its window is already on. Disassembling the Dock shows why the two can't be
-split: the rule's switcher has exactly *one* caller, that same notification block. One
+split: the rule's switcher has exactly _one_ caller, that same notification block. One
 pref, both behaviors. (It's also a separate code path from the "switch to a Space with
 open windows when switching to an application" setting, `AppleSpacesSwitchOnActivate`
-— toggling that does *not* help.)
+— toggling that does _not_ help.)
 
 So since 1.7.0 noswoosh leaves the pref alone and removes the **cause** instead: the
 moment the daemon lands on a space with nothing to focus, it takes activation itself.
@@ -155,13 +162,13 @@ yank comes back. Measured on 27.0: 8/8 switches off a full-screen space landed o
 wrong desktop with the guard off, 0/8 with it on ([#15](https://github.com/mmathys/noswoosh/issues/15)).
 Restored in 1.7.6.
 
-Activating *Finder* instead is not a fix — it yanks you to wherever Finder's own window
+Activating _Finder_ instead is not a fix — it yanks you to wherever Finder's own window
 is (6/6 in the same test). The only app guaranteed to have no off-space window to order
 in is one with no windows at all, which is why the daemon activates itself.
 
 Two variants that seem like they should work and don't, recorded so nobody re-tries
 them: parking a real window on the destination space (verified resident — it still
-yanks, so emptiness is the trigger, not the cause), and taking activation *before* the
+yanks, so emptiness is the trigger, not the cause), and taking activation _before_ the
 switch (the switch re-activates macOS's pick on landing and wipes it out).
 
 ## Troubleshooting
