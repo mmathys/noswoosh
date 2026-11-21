@@ -36,17 +36,30 @@ cask bump in `mmathys/homebrew-tap` — never clone or push that repo by hand.
 progress values are load-bearing and hard-won. `FLT_TRUE_MIN` — what the reference
 implementations use — is flushed to zero on Apple Silicon and breaks direction. The
 pre-27 path uses `1e-4`. The 27 path has gone back and forth: `±1.0` through 1.7.0
-(reported to slide by eye on 27.0), `1e-4` from 1.7.1 to 1.7.6, and `±0.1` since. On
-27.0.1 near-zero progress **lands black**: WindowServer sometimes never composites the
-destination space, and it stays black through later switches until Mission Control
-redraws it. That was 8–13 of every 20 switches at `1e-4`, 3/20 still at 0.02, and 0 in
-over 100 at 0.03–1.0. On 27.0.1 every value from 0.03 to 1.0 cuts in one frame, because
-the ±9999 fling on `.ended` finishes the transition. So magnitude doesn't decide whether
-the switch animates, only whether it lands drawn. Don't use `0` either: `fixed1616`
-serializes it as 0 in the IOHID payload. The measured table is at
-`makeAugmentedDockEvent`. A switch can land black, or land but slide, and an "it
-switched" assertion catches neither. Run `scripts/landing-check.swift`, which films the
-display at 60fps and reports both.
+(reported to slide by eye on 27.0), `1e-4` from 1.7.1 to 1.7.6, `±0.1` on every phase
+in 1.7.7, and since 1.7.8 `1e-4` on `.began`/`.changed` with `±0.1` on `.ended` only.
+
+The two halves do different jobs, and that split is the whole design:
+
+- **`.ended` decides whether it lands drawn.** On 27.0.1 near-zero progress **lands
+  black**: WindowServer sometimes never composites the destination space, and it stays
+  black through later switches until Mission Control redraws it. That was 8–13 of every
+  20 switches at `1e-4`, 3/20 still at 0.02, and 0 in over 100 at 0.03–1.0. On 27.0 the
+  same race blanks just the menu bar (#9). The ±9999 fling on `.ended` finishes the
+  transition in one frame whatever the magnitude, so magnitude doesn't decide whether
+  the switch animates, only whether it lands drawn.
+- **`.began`/`.changed` decide whether you see a jiggle.** Whatever progress they carry,
+  the Dock draws for one frame before the fling: at `0.1` that is the old space slid 10%
+  toward the new one, then snapped home. That was 1.7.7's visible jiggle (1 in-between
+  frame per switch; 0 at `1e-4`).
+
+1.7.8 measured 0 in-between frames and 0 black in 70 switches on 27.2.1, and the menu
+bar drew every time. But 27.2.1 never landed black or lost the menu bar even at `1e-4`
+on every phase, so the black-screen half is **unproven on 27.0.x**. If black comes back
+there, raise only the `.ended` value; raising `.began`/`.changed` brings the jiggle back.
+Don't use `0` on any phase: `fixed1616` serializes it as 0 in the IOHID payload. The
+measured tables are at `makeAugmentedDockEvent`; how to measure is under "Measuring a
+switch" below.
 
 **The macOS 27 IOHID payload is byte-exact.** `generateIOHIDPayload` writes packed
 little-endian structs (28/40/28-byte records) whose sizes and field offsets the Dock
@@ -144,6 +157,47 @@ Test both OS paths. The catch: whichever machine you're on only runs one path na
 Use `NOSWOOSH_FORCE_AUGMENT=1` / `=0` to force the 27 / pre-27 path regardless of OS for
 a smoke test, but the payload is only *validated* by the real OS — a forced path can
 post without switching. So confirm the 27 path on an actual macOS 27.
+
+### Measuring a switch
+
+"It switched" is true of a perfect switch, a switch that jiggled, and a switch that
+landed on a black screen. Every progress-value bug this repo has had passed that check.
+Measure what the eye sees instead, with three probes:
+
+| probe | what it catches | how |
+| --- | --- | --- |
+| `scripts/landing-check.swift`, "slide frames" | a jiggle or slide | Films at 60fps. Compares every frame to "before" (old space) and "after" (new space). A frame matching neither is an in-between frame. A perfect cut has 0, 1.7.7's jiggle has 1, native has ~27. |
+| `scripts/landing-check.swift`, `BLACK` | the destination never drawn (#15) | Mean brightness of the settled frame < 8. |
+| `scripts/menubar-check.swift` | the menu bar never drawn (#9) | Photographs the top strip after each switch. Two wallpapers give two steady alternating values; a blank menu bar drops sharply. |
+
+A one-frame jiggle is 1/60s: you can feel it but you can't judge it by eye, and you
+can't tell 0 frames from 1 by watching. Hence the camera.
+
+How to run a comparison, which is how 1.7.8 was found:
+
+- **Test a build without installing it.** `LANDING_BIN=/path/to/build landing-check RL
+  1100 5` drives the binary directly, and `menubar-check` always does. No daemon is
+  needed. The terminal (or editor) running them needs both **Accessibility** and
+  **Screen Recording**, and must be restarted after Screen Recording is granted. Without
+  Accessibility the switches are silently dropped and every variant looks like "no
+  visible change".
+- **Compare several variants side by side, not one against your memory.** For 1.7.8 a
+  scratch build read the progress values from environment variables, and five variants
+  ran back to back on the same desktop: the shipped value, a smaller one, a missing
+  `.changed`, near-zero everywhere, and the split. Only a side-by-side run separates
+  "this value is better" from "the desktop changed between runs". Keep that scaffolding
+  in a scratch copy, not in the shipped source.
+- **Repeat until intermittent failures would have shown up.** The black landing hit 3 of
+  20 switches at some values, so 10 clean switches proves little. Run the winner at 40+,
+  and include a rapid run (~450ms apart) too, since the prediction window and Dock state
+  behave differently under back-to-back switches.
+- **Check that the machine can fail before trusting a pass.** A test that cannot fail
+  proves nothing. 27.2.1 never lands black or loses the menu bar, even at `1e-4` on
+  every phase, so a clean run there says nothing about 27.0.x — like testing an umbrella
+  indoors. Always run the known-bad variant alongside the candidate. If the known-bad
+  one also passes, say in the commit and PR that the result is unproven on the OS where
+  the bug lived. This is the same lesson as the yank-guard retraction below: "I could
+  not make it fail" is only evidence if the setup could have failed.
 
 ### Testing on a macOS 27 VM
 

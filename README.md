@@ -96,8 +96,8 @@ noswoosh takes the approach used by
 [WhichSpace](https://github.com/gechr/WhichSpace) and BetterTouchTool: synthesize a
 Dock-swipe trackpad gesture with **near-zero progress and high velocity**. The switch
 runs through the Dock's own pipeline — so Mission Control, focus, wallpaper and Dock
-state all stay consistent — but the animation has zero distance to travel, making it
-instant.
+state all stay consistent — but the animation has (almost) no distance to travel,
+making it instant.
 
 Two input sources feed one switch core. An **event tap** watches for real 3-finger
 horizontal swipes, suppresses them before the Dock animates, and posts the instant
@@ -110,6 +110,33 @@ IOHID payload the older technique doesn't carry, so pre-27 builds silently stop
 switching. noswoosh detects the running OS and, on 27, attaches that payload (layout
 reverse-engineered from [joshuarli/iss](https://github.com/joshuarli/iss)); on 26 it
 uses the original lightweight path unchanged.
+
+### What a fake swipe looks like, in plain terms
+
+Think of your desktops as pages in a flipbook. A normal switch animates the page turn,
+which takes about half a second. noswoosh tells the Dock a finger swiped, in three
+messages:
+
+1. **Start:** "a finger touched down."
+2. **Middle:** "it has moved this far" (the *progress* number).
+3. **End:** "it let go, flicking hard" (a huge velocity, which finishes the switch at
+   once).
+
+The numbers in those messages are a balancing act, and the history shows both ways to
+get them wrong:
+
+- **Too small everywhere (1.7.1–1.7.6)**: a switch with no distance at all sometimes
+  confused macOS 27.0 so badly it never painted the new desktop. You landed on a black
+  screen, or one with no menu bar.
+- **10% everywhere (1.7.7)**: the black screens stopped, but the Dock took "moved 10%"
+  literally. For one frame (1/60s) it drew the old page 10% of the way across, then the
+  flick snapped it into place. Too fast to see clearly, but your eye catches a jiggle.
+- **Tiny, then 10% at the end (1.7.8)**: the start and middle say "moved ~0%", so there
+  is nothing to draw before the switch. The end says "10%", so the switch itself still
+  has some distance. It's like a magician hiding the card until the reveal, instead of
+  flashing a corner of it halfway through.
+
+macOS 26 never needed the 10%, so its path stays tiny throughout.
 
 > The name: *swoosh* is Apple's own word for the space-slide animation, from the
 > long-dead Snow Leopard setting `workspaces-swoosh-animation-off`. This is that
@@ -203,9 +230,10 @@ based on most recent use" in System Settings → Desktop & Dock.
   gesture progress; that subnormal float is flushed to zero (sign lost) somewhere in the
   event pipeline on Apple Silicon, making every switch go the same direction. This port
   uses `1e-4`, which survives and is still visually zero, on the macOS 26 path. The
-  macOS 27 path uses `±0.1`. Near-zero progress there (1.7.1–1.7.6) left the
-  destination space black on macOS 27.0.1, often until Mission Control was opened
-  (issue #15). At `0.1` the switch still completes in a single frame.
+  macOS 27 path uses `1e-4` until the gesture's final event, which carries `±0.1`.
+  Near-zero progress on every event (1.7.1–1.7.6) left the destination space black on
+  macOS 27.0.1, often until Mission Control was opened (issue #15). `0.1` on every event
+  (1.7.7) fixed that, but showed one frame of partial slide — a visible jiggle.
 
 ## Uninstall
 
@@ -225,6 +253,10 @@ Issues and pull requests are welcome. The whole tool is one Swift file
 swiftc noswoosh.swift -O -o noswoosh \
     -F /System/Library/PrivateFrameworks -framework SkyLight
 ```
+
+If you change how a switch is posted, measure it with `scripts/landing-check.swift` and
+`scripts/menubar-check.swift` rather than eyeballing it. [AGENTS.md](AGENTS.md) explains
+what each one catches and how to compare variants.
 
 Releases are cut by bumping `noswooshVersion` and pushing a matching `vX.Y.Z` tag;
 CI builds, signs and publishes the app and updates the Homebrew cask.
