@@ -45,7 +45,7 @@ import ApplicationServices
 // Build: swiftc noswoosh.swift -O -o noswoosh \
 //          -F /System/Library/PrivateFrameworks -framework SkyLight
 
-let noswooshVersion = "1.7.7"
+let noswooshVersion = "1.7.8"
 
 // MARK: - Setup / teardown (system configuration, all user-level)
 
@@ -357,9 +357,11 @@ func makeAugmentedDockEvent(_ phase: GesturePhase, right: Bool) -> CGEvent? {
     ev.setIntegerValueField(fieldCGSEventType, value: kCGSEventDockControl)
     ev.setIntegerValueField(fieldGestureHIDType, value: kIOHIDEventTypeDockSwipe)
     ev.setIntegerValueField(fieldGesturePhase, value: phase.rawValue)
-    // Small but NOT near-zero progress. The ±9999 fling on .ended is what commits
-    // the switch and finishes it in a single frame, so the magnitude here does not
-    // decide whether the switch animates — it decides whether it lands *drawn*.
+    // Near-zero progress until .ended, then small but NOT near-zero. The ±9999 fling
+    // on .ended is what commits the switch and finishes it in a single frame, so the
+    // .ended magnitude does not decide whether the switch animates — it decides
+    // whether it lands *drawn*. The .began/.changed magnitude decides whether the
+    // Dock draws a frame of partial slide first (the jiggle; see below).
     //
     // 1.7.1–1.7.6 used 1e-4 (same as the pre-27 path) and on 27.0.1 (26A434) that
     // lands black: the Dock raises its transition snapshots, commits, and tears them
@@ -381,14 +383,34 @@ func makeAugmentedDockEvent(_ phase: GesturePhase, right: Bool) -> CGEvent? {
     //   1.0        0/20, 0/20              1 frame
     //   native     0/20                    ~437ms slide, ~27 frames
     //
-    // 0.1 sits ~5x above the last failing value and still cuts in one frame. Raise
-    // it if the black comes back; lowering it toward 0 is what broke it. Verify
-    // with scripts/landing-check.swift, which catches both a black landing and a
-    // slide — an "it switched" check catches neither. Not 0 either way: `fixed1616`
-    // would serialize it as 0 in the IOHID payload. The pre-27 path keeps 1e-4;
-    // this race was not seen there on 26.6.
+    // 1.7.7 posted 0.1 on all three phases, and that one frame is a visible jiggle:
+    // on .began/.changed the Dock draws the old space slid 10% toward the new one,
+    // then the fling snaps it home. So since 1.7.8 only .ended carries 0.1, and
+    // .began/.changed carry 1e-4 — nothing to draw before the commit, but the commit
+    // itself still has travel. Measured on 27.2.1 (26B131), one 5120x2880 display,
+    // two spaces, switches posted directly, 60fps capture:
+    //
+    //   began/changed  ended   black    in-between frames (median)
+    //   0.1            0.1     0/10     1   <- 1.7.7, the jiggle
+    //   0.03           0.03    0/10     1
+    //   0.1 (no .changed)      0/10     0, but 3 of 10 switches still had one
+    //   1e-4           1e-4    0/10     0
+    //   1e-4           0.1     0/70     0   <- shipped (20 of them at 450ms apart)
+    //
+    // The menu bar (#9) drew after every switch for all of these, checked with
+    // scripts/menubar-check.swift.
+    //
+    // 27.2.1 did not land black at all, even at 1e-4 everywhere, so this machine
+    // could not show that 0.1 on .ended alone still prevents the 27.0.1 black. If
+    // black landings come back on 27.0.x, re-measure there before raising the
+    // .began/.changed value — raising it brings the jiggle back. Verify with
+    // scripts/landing-check.swift, which catches a black landing and a slide; an
+    // "it switched" check catches neither. Not 0 on any phase: `fixed1616` would
+    // serialize it as 0 in the IOHID payload. The pre-27 path keeps 1e-4
+    // throughout; this race was not seen there on 26.6.
     // On the 27 path direction is inverted: rightward = negative progress.
-    ev.setDoubleValueField(fieldSwipeProgress, value: (right ? -0.1 : 0.1) * postedSwipeSign)
+    let progress = phase == .ended ? 0.1 : 1e-4
+    ev.setDoubleValueField(fieldSwipeProgress, value: (right ? -progress : progress) * postedSwipeSign)
     ev.setIntegerValueField(fieldSwipeMotion, value: kCGGestureMotionHorizontal)
     ev.setDoubleValueField(fieldSwipePositionX, value: 0.1)
     // A strong "fling" velocity on the terminal phase is what commits the switch.

@@ -10,9 +10,15 @@
 //
 // Run with the daemon (or a build of it) running and the terminal granted Screen
 // Recording. Presses go through osascript, the only way to reach the Carbon hotkey.
+// To test a build without installing it, set LANDING_BIN to its path: each press then
+// runs `<bin> left|right` directly instead (no daemon needed; the terminal needs
+// Accessibility as well as Screen Recording).
 // Calibration on 27.0.1: native switching reports ~437ms transit / ~27 slide frames;
-// an instant switch reports 0-20ms / 0-1. A BLACK landing is a settled frame with mean
-// luma < 8 — fine for any real wallpaper, but a pure-black wallpaper will false-alarm.
+// an instant switch reports 0-20ms / 0-1. "Slide frames" are frames matching neither
+// the old space nor the new one; 1.7.7's one-frame jiggle shows up as 1, and 1.7.8
+// reports 0 on 27.2.1. A BLACK landing is a settled frame with mean luma < 8 — fine
+// for any real wallpaper, but a pure-black wallpaper will false-alarm. It does not see
+// a blank menu bar (#9); use scripts/menubar-check.swift for that.
 // Start from the first space so the pattern walks the whole list.
 
 import Foundation
@@ -28,10 +34,16 @@ func curSpace() -> UInt64 {
     let d = (SLSCopyManagedDisplaySpaces(cid).takeRetainedValue() as! [[String: Any]])[0]
     return ((d["Current Space"] as? [String: Any])?["ManagedSpaceID"] as? NSNumber)?.uint64Value ?? 0
 }
+let directBin = ProcessInfo.processInfo.environment["LANDING_BIN"]
 func press(_ c: Character) {
     let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-    p.arguments = ["-e", "tell application \"System Events\" to key code \(c == "L" ? 123 : 124) using control down"]
+    if let bin = directBin {
+        p.executableURL = URL(fileURLWithPath: bin)
+        p.arguments = [c == "L" ? "left" : "right"]
+    } else {
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        p.arguments = ["-e", "tell application \"System Events\" to key code \(c == "L" ? 123 : 124) using control down"]
+    }
     try? p.run()
 }
 
